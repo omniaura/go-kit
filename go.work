@@ -1,0 +1,14 @@
+go 1.25.5
+
+use (
+	./cmd/monotag
+	./deref
+	./errs
+	./mapcache
+	./net
+	./ptrconv
+	./set
+	./slicer
+	./sqlconv
+	./tasker
+)
