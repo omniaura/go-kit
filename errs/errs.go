@@ -44,6 +44,9 @@ func (e *Error) Not(err error) bool {
 }
 
 func AsError(ctx context.Context, err error) *Error {
+	if err == nil {
+		return nil
+	}
 	var e *Error
 	if errors.As(err, &e) {
 		if e.ctx == nil {

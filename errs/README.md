@@ -44,9 +44,51 @@ var (
 )
 ```
 
-### Creating Errors
+### The Abort Pattern
 
-Errors are created from factories with a context (for logging):
+Functions that only return an error should return `*errs.Error`. This enables a clean chain pattern for early returns in HTTP handlers:
+
+```go
+// Function returns only *errs.Error
+func ValidateUserID(ctx context.Context, userID string) *errs.Error {
+    if userID == "" {
+        return ErrBadRequest.New(ctx)
+    }
+    if !isValidUUID(userID) {
+        return ErrBadRequest.New(ctx).Strs([]string{"invalid user ID format"})
+    }
+    return nil
+}
+
+// Handler uses the abort pattern
+func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context()
+    
+    if ValidateUserID(ctx, r.PathValue("id")).Abort(w) {
+        return
+    }
+    
+    // continue processing...
+}
+```
+
+`Abort` writes the JSON error response, logs via zerolog, and returns `true` if the error is non-nil.
+
+#### Aborting Any Error
+
+Use `AsError` to abort errors from external libraries that return `error`:
+
+```go
+if errs.AsError(ctx, externalLib.DoSomething()).Abort(w) {
+    return
+}
+```
+
+`AsError` returns `nil` if the error is `nil`, so the chain works seamlessly.
+
+#### When to Use Tuples
+
+If you need to return a value alongside the error, use the standard `error` interface:
 
 ```go
 func GetUser(ctx context.Context, id string) (*User, error) {
@@ -58,23 +100,7 @@ func GetUser(ctx context.Context, id string) (*User, error) {
 }
 ```
 
-### The Abort Pattern
-
-Use `Abort` for clean error handling in HTTP handlers. It writes the JSON response, logs the error, and returns `true` if there was an error:
-
-```go
-func HandleGetUser(w http.ResponseWriter, r *http.Request) {
-    ctx := r.Context()
-    id := r.PathValue("id")
-    
-    user, err := GetUser(ctx, id)
-    if ErrNotFound.New(ctx).Err(err).Abort(w) {
-        return
-    }
-    
-    json.NewEncoder(w).Encode(user)
-}
-```
+This allows reusing `var err error` across multiple calls while still benefiting from structured errors.
 
 ### Annotating Errors
 
