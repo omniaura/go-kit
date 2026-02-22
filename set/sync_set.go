@@ -24,11 +24,25 @@ func (s *SyncSet[T]) Add(key T) {
 	s.set.Add(key)
 }
 
+// AddAll adds multiple keys to the set.
+func (s *SyncSet[T]) AddAll(keys ...T) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.set.AddAll(keys...)
+}
+
 // Remove removes a key from the set.
 func (s *SyncSet[T]) Remove(key T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.set.Remove(key)
+}
+
+// RemoveAll removes multiple keys from the set.
+func (s *SyncSet[T]) RemoveAll(keys ...T) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.set.RemoveAll(keys...)
 }
 
 // Clear clears the set.

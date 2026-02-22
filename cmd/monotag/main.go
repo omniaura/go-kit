@@ -1,1 +1,1 @@
-package monotag
+package main

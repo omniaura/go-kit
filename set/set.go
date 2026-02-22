@@ -20,10 +20,24 @@ func (s Set[T]) Add(key T) {
 	s[key] = struct{}{}
 }
 
+// AddAll adds multiple keys to the set.
+func (s Set[T]) AddAll(keys ...T) {
+	for _, key := range keys {
+		s.Add(key)
+	}
+}
+
 // Remove removes a key from the set.
 // If the key is not in the set, it is a no-op.
 func (s Set[T]) Remove(key T) {
 	delete(s, key)
+}
+
+// RemoveAll removes multiple keys from the set.
+func (s Set[T]) RemoveAll(keys ...T) {
+	for _, key := range keys {
+		s.Remove(key)
+	}
 }
 
 // Clear clears the set.
