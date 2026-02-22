@@ -66,6 +66,13 @@ func (s *SyncSet[T]) Missing(key T) bool {
 	return s.set.Missing(key)
 }
 
+// Slice returns the keys of the set as a slice.
+func (s *SyncSet[T]) Slice() []T {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.set.Slice()
+}
+
 // Len returns the number of keys in the set.
 func (s *SyncSet[T]) Len() int {
 	s.mu.RLock()

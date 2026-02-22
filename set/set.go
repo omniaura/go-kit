@@ -55,3 +55,12 @@ func (s Set[T]) Contains(key T) bool {
 func (s Set[T]) Missing(key T) bool {
 	return !s.Contains(key)
 }
+
+// Slice returns the keys of the set as a slice.
+func (s Set[T]) Slice() []T {
+	sl := make([]T, 0, len(s))
+	for key := range s {
+		sl = append(sl, key)
+	}
+	return sl
+}
