@@ -5,6 +5,7 @@ toolchain go1.26.1
 use (
 	./cmd/monotag
 	./convert
+	./convert/sqlconv/pgconv
 	./errs
 	./mapcache
 	./net

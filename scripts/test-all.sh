@@ -18,6 +18,6 @@ for module in "${modules[@]}"; do
   echo "==> go test ./${module}/..."
   (
     cd "${module}"
-    GOWORK=off go test ./...
+    go test ./...
   )
 done
