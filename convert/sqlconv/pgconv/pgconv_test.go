@@ -1,7 +1,9 @@
 package pgconv_test
 
 import (
+	"math"
 	"math/big"
+	"math/bits"
 	"testing"
 	"time"
 
@@ -10,217 +12,210 @@ import (
 	"github.com/omniaura/go-kit/convert/sqlconv/pgconv"
 )
 
-type namedString string
+func TestTextBuilderAndConstructors(t *testing.T) {
+	empty := ""
+	greeting := "hello"
 
-type namedBool bool
-
-type namedInt int
-
-type namedFloat float64
-
-func TestTextHelpers(t *testing.T) {
-	value := namedString("hello")
-	if got := pgconv.Text(value); got.String != "hello" || !got.Valid {
-		t.Fatalf("Text() = %#v", got)
+	if got := pgconv.ValidText(empty); !got.Valid || got.String != "" {
+		t.Fatalf("ValidText(empty) = %#v", got)
 	}
-
-	if got := pgconv.NText(namedString("")); got.Valid {
+	if got := pgconv.NText(empty); got.Valid {
 		t.Fatalf("NText(empty) should be invalid: %#v", got)
 	}
-
-	if got := pgconv.TextFromPtr(&value); got.String != "hello" || !got.Valid {
-		t.Fatalf("TextFromPtr() = %#v", got)
+	if got := pgconv.TextFromPtr(&empty); !got.Valid || got.String != "" {
+		t.Fatalf("TextFromPtr(empty) = %#v", got)
 	}
-	if got := pgconv.TextFromPtr((*namedString)(nil)); got.Valid {
+	if got := pgconv.TextFromPtr((*string)(nil)); got.Valid {
 		t.Fatalf("TextFromPtr(nil) should be invalid: %#v", got)
 	}
 
-	text := pgtype.Text{String: "greet", Valid: true}
-	if got := pgconv.TextValue[namedString](text); got != "greet" {
-		t.Fatalf("TextValue() = %q", got)
+	builder := pgconv.Text(pgtype.Text{String: greeting, Valid: true})
+	if got := builder.Value(); got != greeting {
+		t.Fatalf("Text.Value() = %q", got)
 	}
-	if got := pgconv.TextOr(pgtype.Text{}, namedString("fallback")); got != "fallback" {
-		t.Fatalf("TextOr() = %q", got)
+	if ptr := builder.Ptr(); ptr == nil || *ptr != greeting {
+		t.Fatalf("Text.Ptr() = %#v", ptr)
 	}
-
-	ptr := pgconv.TextPtr(text)
-	if ptr == nil || *ptr != "greet" {
-		t.Fatalf("TextPtr() = %#v", ptr)
-	}
-	if got := pgconv.TextPtr(pgtype.Text{}); got != nil {
-		t.Fatalf("TextPtr(invalid) = %#v", got)
+	filled := "seed"
+	builder.Fill(&filled)
+	if filled != greeting {
+		t.Fatalf("Text.Fill() = %q", filled)
 	}
 
-	filled := namedString("seed")
-	pgconv.FillText(text, &filled)
-	if filled != "greet" {
-		t.Fatalf("FillText() = %q", filled)
+	nullBuilder := pgconv.Text(pgtype.Text{})
+	if got := nullBuilder.Value(); got != "" {
+		t.Fatalf("Text(NULL).Value() = %q", got)
 	}
-	pgconv.FillText(pgtype.Text{}, &filled)
-	if filled != "greet" {
-		t.Fatalf("FillText(invalid) changed value to %q", filled)
+	if ptr := nullBuilder.Ptr(); ptr != nil {
+		t.Fatalf("Text(NULL).Ptr() = %#v", ptr)
 	}
-	pgconv.FillTextOr(pgtype.Text{}, &filled, namedString("fallback"))
+	nullBuilder.Fill(&filled)
+	if filled != greeting {
+		t.Fatalf("Text(NULL).Fill() changed value to %q", filled)
+	}
+
+	fallbackBuilder := pgconv.Text(pgtype.Text{}).Fallback("fallback")
+	if got := fallbackBuilder.Value(); got != "fallback" {
+		t.Fatalf("Text(NULL).Fallback().Value() = %q", got)
+	}
+	if ptr := fallbackBuilder.Ptr(); ptr == nil || *ptr != "fallback" {
+		t.Fatalf("Text(NULL).Fallback().Ptr() = %#v", ptr)
+	}
+	fallbackBuilder.Fill(&filled)
 	if filled != "fallback" {
-		t.Fatalf("FillTextOr() = %q", filled)
+		t.Fatalf("Text(NULL).Fallback().Fill() = %q", filled)
 	}
 }
 
-func TestBoolAndNumberHelpers(t *testing.T) {
-	b := namedBool(true)
-	if got := pgconv.BoolFromPtr(&b); !got.Valid || !got.Bool {
+func TestBoolAndIntegerBuilders(t *testing.T) {
+	truth := true
+	if got := pgconv.BoolFromPtr(&truth); !got.Valid || !got.Bool {
 		t.Fatalf("BoolFromPtr() = %#v", got)
 	}
-	if got := pgconv.BoolValue[namedBool](pgtype.Bool{Bool: true, Valid: true}); got != true {
-		t.Fatalf("BoolValue() = %v", got)
+	if got := pgconv.Bool(pgtype.Bool{Bool: true, Valid: true}).Value(); !got {
+		t.Fatalf("Bool.Value() = %v", got)
 	}
-	if got := pgconv.BoolOr(pgtype.Bool{}, namedBool(true)); got != true {
-		t.Fatalf("BoolOr() = %v", got)
-	}
-	if got := pgconv.BoolPtr(pgtype.Bool{Bool: true, Valid: true}); got == nil || *got != true {
-		t.Fatalf("BoolPtr() = %#v", got)
-	}
-	filledBool := namedBool(false)
-	pgconv.FillBoolOr(pgtype.Bool{}, &filledBool, namedBool(true))
-	if filledBool != true {
-		t.Fatalf("FillBoolOr() = %v", filledBool)
+	boolFilled := false
+	pgconv.Bool(pgtype.Bool{}).Fallback(true).Fill(&boolFilled)
+	if !boolFilled {
+		t.Fatalf("Bool.Fallback().Fill() = %v", boolFilled)
 	}
 
-	intVal := namedInt(42)
-	if got := pgconv.NInt2(intVal); !got.Valid || got.Int16 != 42 {
-		t.Fatalf("NInt2() = %#v", got)
-	}
-	if got := pgconv.Int2FromPtr(&intVal); !got.Valid || got.Int16 != 42 {
+	int16Value := int16(42)
+	if got := pgconv.Int2FromPtr(&int16Value); !got.Valid || got.Int16 != 42 {
 		t.Fatalf("Int2FromPtr() = %#v", got)
 	}
-	if got := pgconv.Int2Value[namedInt](pgtype.Int2{Int16: 7, Valid: true}); got != 7 {
-		t.Fatalf("Int2Value() = %v", got)
+	if got := pgconv.Int2(pgtype.Int2{Int16: 7, Valid: true}).Value(); got != 7 {
+		t.Fatalf("Int2.Value() = %d", got)
+	}
+	intValue, err := pgconv.Int2(pgtype.Int2{Int16: 8, Valid: true}).Int().Value()
+	if err != nil || intValue != 8 {
+		t.Fatalf("Int2.Int().Value() = %d, %v", intValue, err)
+	}
+	intFilled := 0
+	if err := pgconv.Int2(pgtype.Int2{}).Int().Fallback(9).Fill(&intFilled); err != nil {
+		t.Fatalf("Int2.Int().Fallback().Fill() error = %v", err)
+	}
+	if intFilled != 9 {
+		t.Fatalf("Int2.Int().Fallback().Fill() = %d", intFilled)
 	}
 
-	if got := pgconv.NInt4(intVal); !got.Valid || got.Int32 != 42 {
-		t.Fatalf("NInt4() = %#v", got)
+	int32Value := int32(43)
+	if got := pgconv.Int4FromPtr(&int32Value); !got.Valid || got.Int32 != 43 {
+		t.Fatalf("Int4FromPtr() = %#v", got)
 	}
-	if got := pgconv.Int4Or(pgtype.Int4{}, namedInt(9)); got != 9 {
-		t.Fatalf("Int4Or() = %v", got)
+	if got := pgconv.Int4(pgtype.Int4{Int32: 17, Valid: true}).Value(); got != 17 {
+		t.Fatalf("Int4.Value() = %d", got)
 	}
-	ptr4 := pgconv.Int4Ptr[namedInt](pgtype.Int4{Int32: 11, Valid: true})
-	if ptr4 == nil || *ptr4 != 11 {
-		t.Fatalf("Int4Ptr() = %#v", ptr4)
-	}
-	filled4 := namedInt(0)
-	pgconv.FillInt4(pgtype.Int4{Int32: 12, Valid: true}, &filled4)
-	if filled4 != 12 {
-		t.Fatalf("FillInt4() = %v", filled4)
+	intValue, err = pgconv.Int4(pgtype.Int4{Int32: 18, Valid: true}).Int().Value()
+	if err != nil || intValue != 18 {
+		t.Fatalf("Int4.Int().Value() = %d, %v", intValue, err)
 	}
 
-	if got := pgconv.NInt8(intVal); !got.Valid || got.Int64 != 42 {
-		t.Fatalf("NInt8() = %#v", got)
+	int64Value := int64(44)
+	if got := pgconv.Int8FromPtr(&int64Value); !got.Valid || got.Int64 != 44 {
+		t.Fatalf("Int8FromPtr() = %#v", got)
 	}
-	if got := pgconv.Int8Or(pgtype.Int8{}, namedInt(13)); got != 13 {
-		t.Fatalf("Int8Or() = %v", got)
+	if got := pgconv.Int8(pgtype.Int8{Int64: 19, Valid: true}).Value(); got != 19 {
+		t.Fatalf("Int8.Value() = %d", got)
 	}
-	filled8 := namedInt(0)
-	pgconv.FillInt8Or(pgtype.Int8{}, &filled8, namedInt(14))
-	if filled8 != 14 {
-		t.Fatalf("FillInt8Or() = %v", filled8)
+	ptr, err := pgconv.Int8(pgtype.Int8{Int64: 20, Valid: true}).Int().Ptr()
+	if err != nil || ptr == nil || *ptr != 20 {
+		t.Fatalf("Int8.Int().Ptr() = %#v, %v", ptr, err)
 	}
 
-	floatVal := namedFloat(1.5)
-	if got := pgconv.NFloat8(floatVal); !got.Valid || got.Float64 != 1.5 {
-		t.Fatalf("NFloat8() = %#v", got)
-	}
-	if got := pgconv.Float8FromPtr(&floatVal); !got.Valid || got.Float64 != 1.5 {
-		t.Fatalf("Float8FromPtr() = %#v", got)
-	}
-	if got := pgconv.Float8Value[namedFloat](pgtype.Float8{Float64: 2.5, Valid: true}); got != 2.5 {
-		t.Fatalf("Float8Value() = %v", got)
-	}
-	if got := pgconv.Float8Or(pgtype.Float8{}, namedFloat(3.5)); got != 3.5 {
-		t.Fatalf("Float8Or() = %v", got)
-	}
-	ptr8 := pgconv.Float8Ptr[namedFloat](pgtype.Float8{Float64: 4.5, Valid: true})
-	if ptr8 == nil || *ptr8 != 4.5 {
-		t.Fatalf("Float8Ptr() = %#v", ptr8)
-	}
-	filledFloat := namedFloat(0)
-	pgconv.FillFloat8Or(pgtype.Float8{}, &filledFloat, namedFloat(5.5))
-	if filledFloat != 5.5 {
-		t.Fatalf("FillFloat8Or() = %v", filledFloat)
+	if bits.UintSize == 32 {
+		tooLarge := int64(math.MaxInt32) + 1
+		if _, err := pgconv.Int8(pgtype.Int8{Int64: tooLarge, Valid: true}).Int().Value(); err == nil {
+			t.Fatal("Int8.Int().Value() expected overflow error on 32-bit")
+		}
 	}
 }
 
-func TestTimeHelpers(t *testing.T) {
+func TestFloatAndTimeBuilders(t *testing.T) {
+	floatValue := 1.5
+	if got := pgconv.Float8FromPtr(&floatValue); !got.Valid || got.Float64 != 1.5 {
+		t.Fatalf("Float8FromPtr() = %#v", got)
+	}
+	if got := pgconv.Float8(pgtype.Float8{Float64: 2.5, Valid: true}).Value(); got != 2.5 {
+		t.Fatalf("Float8.Value() = %v", got)
+	}
+	floatFilled := 0.0
+	pgconv.Float8(pgtype.Float8{}).Fallback(3.5).Fill(&floatFilled)
+	if floatFilled != 3.5 {
+		t.Fatalf("Float8.Fallback().Fill() = %v", floatFilled)
+	}
+
 	now := time.Date(2026, 4, 1, 12, 34, 56, 0, time.UTC)
 	fallback := now.Add(-time.Hour)
 
 	if got := pgconv.NDate(now); !got.Valid || !got.Time.Equal(now) {
 		t.Fatalf("NDate() = %#v", got)
 	}
-	if got := pgconv.NDate(time.Time{}); got.Valid {
-		t.Fatalf("NDate(zero) should be invalid: %#v", got)
-	}
 	if got := pgconv.DateFromPtr(&now); !got.Valid || !got.Time.Equal(now) {
 		t.Fatalf("DateFromPtr() = %#v", got)
 	}
-	if got := pgconv.DateValue(pgtype.Date{Time: now, Valid: true}); !got.Equal(now) {
-		t.Fatalf("DateValue() = %v", got)
+	if got := pgconv.Date(pgtype.Date{Time: now, Valid: true, InfinityModifier: pgtype.Finite}).Value(); !got.Equal(now) {
+		t.Fatalf("Date.Value() = %v", got)
 	}
-	if got := pgconv.DateOr(pgtype.Date{}, fallback); !got.Equal(fallback) {
-		t.Fatalf("DateOr() = %v", got)
-	}
-	if got := pgconv.DatePtr(pgtype.Date{Time: now, Valid: true}); got == nil || !got.Equal(now) {
-		t.Fatalf("DatePtr() = %#v", got)
-	}
-	filledDate := time.Time{}
-	pgconv.FillDateOr(pgtype.Date{}, &filledDate, fallback)
-	if !filledDate.Equal(fallback) {
-		t.Fatalf("FillDateOr() = %v", filledDate)
+	dateFilled := time.Time{}
+	pgconv.Date(pgtype.Date{}).Fallback(fallback).Fill(&dateFilled)
+	if !dateFilled.Equal(fallback) {
+		t.Fatalf("Date.Fallback().Fill() = %v", dateFilled)
 	}
 
-	if got := pgconv.NTimestamp(now); !got.Valid || !got.Time.Equal(now) {
-		t.Fatalf("NTimestamp() = %#v", got)
+	for _, modifier := range []pgtype.InfinityModifier{pgtype.Infinity, pgtype.NegativeInfinity} {
+		dateBuilder := pgconv.Date(pgtype.Date{Time: now, Valid: true, InfinityModifier: modifier})
+		if got := dateBuilder.Value(); !got.IsZero() {
+			t.Fatalf("Date(%v).Value() = %v", modifier, got)
+		}
+		if ptr := dateBuilder.Ptr(); ptr != nil {
+			t.Fatalf("Date(%v).Ptr() = %#v", modifier, ptr)
+		}
+		seed := now
+		dateBuilder.Fill(&seed)
+		if !seed.Equal(now) {
+			t.Fatalf("Date(%v).Fill() changed value to %v", modifier, seed)
+		}
+		dateBuilder.Fallback(fallback).Fill(&seed)
+		if !seed.Equal(fallback) {
+			t.Fatalf("Date(%v).Fallback().Fill() = %v", modifier, seed)
+		}
 	}
+
 	if got := pgconv.TimestampFromPtr(&now); !got.Valid || !got.Time.Equal(now) {
 		t.Fatalf("TimestampFromPtr() = %#v", got)
 	}
-	if got := pgconv.TimestampValue(pgtype.Timestamp{Time: now, Valid: true}); !got.Equal(now) {
-		t.Fatalf("TimestampValue() = %v", got)
+	if got := pgconv.Timestamp(pgtype.Timestamp{Time: now, Valid: true, InfinityModifier: pgtype.Finite}).Value(); !got.Equal(now) {
+		t.Fatalf("Timestamp.Value() = %v", got)
 	}
-	if got := pgconv.TimestampOr(pgtype.Timestamp{}, fallback); !got.Equal(fallback) {
-		t.Fatalf("TimestampOr() = %v", got)
-	}
-	if got := pgconv.TimestampPtr(pgtype.Timestamp{Time: now, Valid: true}); got == nil || !got.Equal(now) {
-		t.Fatalf("TimestampPtr() = %#v", got)
-	}
-	filledTimestamp := time.Time{}
-	pgconv.FillTimestampOr(pgtype.Timestamp{}, &filledTimestamp, fallback)
-	if !filledTimestamp.Equal(fallback) {
-		t.Fatalf("FillTimestampOr() = %v", filledTimestamp)
+	for _, modifier := range []pgtype.InfinityModifier{pgtype.Infinity, pgtype.NegativeInfinity} {
+		builder := pgconv.Timestamp(pgtype.Timestamp{Time: now, Valid: true, InfinityModifier: modifier}).Fallback(fallback)
+		if got := builder.Value(); !got.Equal(fallback) {
+			t.Fatalf("Timestamp(%v).Fallback().Value() = %v", modifier, got)
+		}
 	}
 
-	if got := pgconv.NTimestamptz(now); !got.Valid || !got.Time.Equal(now) {
-		t.Fatalf("NTimestamptz() = %#v", got)
-	}
 	if got := pgconv.TimestamptzFromPtr(&now); !got.Valid || !got.Time.Equal(now) {
 		t.Fatalf("TimestamptzFromPtr() = %#v", got)
 	}
-	if got := pgconv.TimestamptzValue(pgtype.Timestamptz{Time: now, Valid: true}); !got.Equal(now) {
-		t.Fatalf("TimestamptzValue() = %v", got)
+	if got := pgconv.Timestamptz(pgtype.Timestamptz{Time: now, Valid: true, InfinityModifier: pgtype.Finite}).Value(); !got.Equal(now) {
+		t.Fatalf("Timestamptz.Value() = %v", got)
 	}
-	if got := pgconv.TimestamptzOr(pgtype.Timestamptz{}, fallback); !got.Equal(fallback) {
-		t.Fatalf("TimestamptzOr() = %v", got)
-	}
-	if got := pgconv.TimestamptzPtr(pgtype.Timestamptz{Time: now, Valid: true}); got == nil || !got.Equal(now) {
-		t.Fatalf("TimestamptzPtr() = %#v", got)
-	}
-	filledTimestamptz := time.Time{}
-	pgconv.FillTimestamptzOr(pgtype.Timestamptz{}, &filledTimestamptz, fallback)
-	if !filledTimestamptz.Equal(fallback) {
-		t.Fatalf("FillTimestamptzOr() = %v", filledTimestamptz)
+	for _, modifier := range []pgtype.InfinityModifier{pgtype.Infinity, pgtype.NegativeInfinity} {
+		builder := pgconv.Timestamptz(pgtype.Timestamptz{Time: now, Valid: true, InfinityModifier: modifier})
+		if ptr := builder.Ptr(); ptr != nil {
+			t.Fatalf("Timestamptz(%v).Ptr() = %#v", modifier, ptr)
+		}
+		seed := time.Time{}
+		builder.Fallback(fallback).Fill(&seed)
+		if !seed.Equal(fallback) {
+			t.Fatalf("Timestamptz(%v).Fallback().Fill() = %v", modifier, seed)
+		}
 	}
 }
 
-func TestUUIDHelpers(t *testing.T) {
+func TestUUIDBuilderAndConstructors(t *testing.T) {
 	id := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	fallback := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 
@@ -233,98 +228,94 @@ func TestUUIDHelpers(t *testing.T) {
 	if got := pgconv.UUIDFromPtr(&id); !got.Valid || uuid.UUID(got.Bytes) != id {
 		t.Fatalf("UUIDFromPtr() = %#v", got)
 	}
-	if got := pgconv.UUIDValue(pgtype.UUID{Bytes: [16]byte(id), Valid: true}); got != id {
-		t.Fatalf("UUIDValue() = %v", got)
+
+	builder := pgconv.UUID(pgtype.UUID{Bytes: [16]byte(id), Valid: true})
+	if got := builder.Value(); got != id {
+		t.Fatalf("UUID.Value() = %v", got)
 	}
-	if got := pgconv.UUIDOr(pgtype.UUID{}, fallback); got != fallback {
-		t.Fatalf("UUIDOr() = %v", got)
+	if got := builder.String(); got != id.String() {
+		t.Fatalf("UUID.String() = %q", got)
 	}
-	if got := pgconv.UUIDString(pgtype.UUID{Bytes: [16]byte(id), Valid: true}); got != id.String() {
-		t.Fatalf("UUIDString() = %q", got)
-	}
-	if got := pgconv.UUIDStringOr(pgtype.UUID{}, fallback.String()); got != fallback.String() {
-		t.Fatalf("UUIDStringOr() = %q", got)
-	}
-	ptr := pgconv.UUIDPtr(pgtype.UUID{Bytes: [16]byte(id), Valid: true})
-	if ptr == nil || *ptr != id {
-		t.Fatalf("UUIDPtr() = %#v", ptr)
+	if ptr := builder.Ptr(); ptr == nil || *ptr != id {
+		t.Fatalf("UUID.Ptr() = %#v", ptr)
 	}
 
 	filled := uuid.Nil
-	pgconv.FillUUID(pgtype.UUID{Bytes: [16]byte(id), Valid: true}, &filled)
-	if filled != id {
-		t.Fatalf("FillUUID() = %v", filled)
-	}
-	pgconv.FillUUIDOr(pgtype.UUID{}, &filled, fallback)
+	pgconv.UUID(pgtype.UUID{}).Fallback(fallback).Fill(&filled)
 	if filled != fallback {
-		t.Fatalf("FillUUIDOr() = %v", filled)
+		t.Fatalf("UUID.Fallback().Fill() = %v", filled)
 	}
 }
 
-func TestNumericHelpers(t *testing.T) {
+func TestNumericBuilders(t *testing.T) {
 	numericFloat := pgtype.Numeric{Int: big.NewInt(12345), Exp: -2, Valid: true}
-	gotFloat, err := pgconv.NumericFloat64(numericFloat)
+	gotFloat, err := pgconv.Numeric(numericFloat).Float64().Value()
 	if err != nil {
-		t.Fatalf("NumericFloat64() error = %v", err)
+		t.Fatalf("Numeric.Float64().Value() error = %v", err)
 	}
 	if gotFloat != 123.45 {
-		t.Fatalf("NumericFloat64() = %v", gotFloat)
+		t.Fatalf("Numeric.Float64().Value() = %v", gotFloat)
 	}
 
-	ptrFloat, err := pgconv.NumericFloat64Ptr(numericFloat)
+	floatPtr, err := pgconv.Numeric(numericFloat).Float64().Ptr()
+	if err != nil || floatPtr == nil || *floatPtr != 123.45 {
+		t.Fatalf("Numeric.Float64().Ptr() = %#v, %v", floatPtr, err)
+	}
+
+	floatFilled := 0.0
+	if err := pgconv.Numeric(pgtype.Numeric{}).Float64().Fallback(9.5).Fill(&floatFilled); err != nil {
+		t.Fatalf("Numeric.Float64().Fallback().Fill() error = %v", err)
+	}
+	if floatFilled != 9.5 {
+		t.Fatalf("Numeric.Float64().Fallback().Fill() = %v", floatFilled)
+	}
+
+	numericInt := pgtype.Numeric{Int: big.NewInt(42), Exp: 0, Valid: true}
+	gotInt, err := pgconv.Numeric(numericInt).Int64().Value()
 	if err != nil {
-		t.Fatalf("NumericFloat64Ptr() error = %v", err)
+		t.Fatalf("Numeric.Int64().Value() error = %v", err)
 	}
-	if ptrFloat == nil || *ptrFloat != 123.45 {
-		t.Fatalf("NumericFloat64Ptr() = %#v", ptrFloat)
-	}
-
-	filledFloat := 0.0
-	if err := pgconv.FillNumericFloat64Or(pgtype.Numeric{}, &filledFloat, 9.9); err != nil {
-		t.Fatalf("FillNumericFloat64Or() error = %v", err)
-	}
-	if filledFloat != 9.9 {
-		t.Fatalf("FillNumericFloat64Or() = %v", filledFloat)
+	if gotInt != 42 {
+		t.Fatalf("Numeric.Int64().Value() = %d", gotInt)
 	}
 
-	numericInt := pgtype.Numeric{Int: big.NewInt(77), Exp: 0, Valid: true}
-	gotInt, err := pgconv.NumericInt64(numericInt)
-	if err != nil {
-		t.Fatalf("NumericInt64() error = %v", err)
+	intFilled := int64(0)
+	if err := pgconv.Numeric(pgtype.Numeric{}).Int64().Fallback(7).Fill(&intFilled); err != nil {
+		t.Fatalf("Numeric.Int64().Fallback().Fill() error = %v", err)
 	}
-	if gotInt != 77 {
-		t.Fatalf("NumericInt64() = %v", gotInt)
-	}
-
-	ptrInt, err := pgconv.NumericInt64Ptr(numericInt)
-	if err != nil {
-		t.Fatalf("NumericInt64Ptr() error = %v", err)
-	}
-	if ptrInt == nil || *ptrInt != 77 {
-		t.Fatalf("NumericInt64Ptr() = %#v", ptrInt)
+	if intFilled != 7 {
+		t.Fatalf("Numeric.Int64().Fallback().Fill() = %d", intFilled)
 	}
 
-	filledInt := int64(0)
-	if err := pgconv.FillNumericInt64Or(pgtype.Numeric{}, &filledInt, 88); err != nil {
-		t.Fatalf("FillNumericInt64Or() error = %v", err)
+	plainInt := 0
+	if err := pgconv.Numeric(numericInt).Int().Fill(&plainInt); err != nil {
+		t.Fatalf("Numeric.Int().Fill() error = %v", err)
 	}
-	if filledInt != 88 {
-		t.Fatalf("FillNumericInt64Or() = %v", filledInt)
-	}
-
-	fallbackFloat, err := pgconv.NumericFloat64Or(pgtype.Numeric{}, 1.25)
-	if err != nil {
-		t.Fatalf("NumericFloat64Or() error = %v", err)
-	}
-	if fallbackFloat != 1.25 {
-		t.Fatalf("NumericFloat64Or() = %v", fallbackFloat)
+	if plainInt != 42 {
+		t.Fatalf("Numeric.Int().Fill() = %d", plainInt)
 	}
 
-	fallbackInt, err := pgconv.NumericInt64Or(pgtype.Numeric{}, 99)
-	if err != nil {
-		t.Fatalf("NumericInt64Or() error = %v", err)
+	tooLargeFloat := pgtype.Numeric{Int: new(big.Int).Exp(big.NewInt(10), big.NewInt(400), nil), Exp: 0, Valid: true}
+	floatSeed := 55.0
+	if _, err := pgconv.Numeric(tooLargeFloat).Float64().Value(); err == nil {
+		t.Fatal("Numeric.Float64().Value() expected error")
 	}
-	if fallbackInt != 99 {
-		t.Fatalf("NumericInt64Or() = %v", fallbackInt)
+	if err := pgconv.Numeric(tooLargeFloat).Float64().Fallback(8.5).Fill(&floatSeed); err == nil {
+		t.Fatal("Numeric.Float64().Fallback().Fill() expected error")
+	}
+	if floatSeed != 55.0 {
+		t.Fatalf("Numeric.Float64().Fallback().Fill() changed value to %v", floatSeed)
+	}
+
+	fractionalInt := pgtype.Numeric{Int: big.NewInt(15), Exp: -1, Valid: true}
+	intSeed := int64(77)
+	if _, err := pgconv.Numeric(fractionalInt).Int64().Value(); err == nil {
+		t.Fatal("Numeric.Int64().Value() expected error")
+	}
+	if err := pgconv.Numeric(fractionalInt).Int64().Fallback(9).Fill(&intSeed); err == nil {
+		t.Fatal("Numeric.Int64().Fallback().Fill() expected error")
+	}
+	if intSeed != 77 {
+		t.Fatalf("Numeric.Int64().Fallback().Fill() changed value to %d", intSeed)
 	}
 }
