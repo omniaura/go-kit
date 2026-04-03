@@ -3,11 +3,12 @@ go 1.25.5
 use (
 	./cmd/monotag
 	./convert
-	./convert/sqlconv/pgconv
 	./errs
 	./mapcache
 	./net
+	./pgconv
 	./set
 	./slicer
+	./sqlconv
 	./tasker
 )

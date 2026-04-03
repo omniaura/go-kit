@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/omniaura/go-kit/convert/sqlconv/pgconv/pgdecode"
+	"github.com/omniaura/go-kit/pgconv/pgdecode"
 )
 
 func TestText(t *testing.T) {

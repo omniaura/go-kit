@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/omniaura/go-kit/convert/sqlconv/pgconv/pgencode"
+	"github.com/omniaura/go-kit/pgconv/pgencode"
 )
 
 func TestString(t *testing.T) {
