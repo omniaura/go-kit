@@ -1,6 +1,6 @@
 # errs
 
-A structured error handling package for Go HTTP services with built-in zerolog integration, JSON serialization, and the abort pattern.
+A structured error handling package for Go HTTP services with built-in zerolog integration, RFC 7807 problem details responses, and the abort pattern.
 
 ## Installation
 
@@ -12,7 +12,7 @@ go get github.com/omniaura/go-kit/errs
 
 - **Error Factories** — Define reusable error types with HTTP status codes and messages
 - **Zerolog Integration** — Automatic structured logging with configurable log levels
-- **JSON Responses** — Errors serialize to clean JSON for API responses
+- **Problem Details Responses** — Errors serialize as `application/problem+json` for API responses
 - **Method Chaining** — Fluent API for annotating errors with context
 - **Abort Pattern** — One-liner error handling in HTTP handlers
 - **Error Matching** — `Is`/`Not` methods compatible with Go's error handling idioms
@@ -72,7 +72,7 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-`Abort` writes the JSON error response, logs via zerolog, and returns `true` if the error is non-nil.
+`Abort` writes the problem details response with `Content-Type: application/problem+json`, logs via zerolog, and returns `true` if the error is non-nil.
 
 #### Aborting Any Error
 
@@ -147,14 +147,16 @@ err := someExternalLibrary()
 e := errs.AsError(ctx, err) // Wraps as Unknown (500) if not already an *errs.Error
 ```
 
-### JSON Response Format
+### Problem Details Response Format
 
-Errors serialize to JSON automatically:
+Errors serialize to RFC 7807 problem details automatically:
 
 ```json
 {
-    "message": "resource not found: record does not exist",
-    "status": 404
+    "type": "about:blank",
+    "title": "Not Found",
+    "status": 404,
+    "detail": "resource not found: record does not exist"
 }
 ```
 
@@ -198,6 +200,7 @@ Returns a `422 Unprocessable Entity` with the missing field names.
 | `Log(f func(*zerolog.Event)) *Error` | Add custom log fields |
 | `Abort(w http.ResponseWriter) bool` | Write response & log; returns true if error exists |
 | `Message() string` | Get the full error message |
+| `Title() string` | Get the problem details title |
 | `Error() string` | Implements `error` interface |
 | `Is(err error) bool` | Check if errors match |
 | `Not(err error) bool` | Check if errors don't match |
@@ -212,4 +215,3 @@ Returns a `422 Unprocessable Entity` with the missing field names.
 ## License
 
 See [LICENSE](../LICENSE) in the repository root.
-
