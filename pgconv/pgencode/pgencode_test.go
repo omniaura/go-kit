@@ -43,11 +43,14 @@ func TestBool(t *testing.T) {
 }
 
 func TestIntegers(t *testing.T) {
-	if got, err := pgencode.Int8(7).Int2(); err != nil || !got.Valid || got.Int16 != 7 {
-		t.Fatalf("Int8().Int2() = %#v, %v", got, err)
+	if got := pgencode.Int8(7).Int2(); !got.Valid || got.Int16 != 7 {
+		t.Fatalf("Int8().Int2() = %#v", got)
 	}
-	if got, err := pgencode.Int16(8).Int4(); err != nil || !got.Valid || got.Int32 != 8 {
-		t.Fatalf("Int16().Int4() = %#v, %v", got, err)
+	if got := pgencode.Int16(8).Int4(); !got.Valid || got.Int32 != 8 {
+		t.Fatalf("Int16().Int4() = %#v", got)
+	}
+	if got := pgencode.Int32(9).Int4(); !got.Valid || got.Int32 != 9 {
+		t.Fatalf("Int32().Int4() = %#v", got)
 	}
 	if got := pgencode.Int32(9).Int8(); !got.Valid || got.Int64 != 9 {
 		t.Fatalf("Int32().Int8() = %#v", got)

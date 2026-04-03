@@ -87,12 +87,18 @@ type int8Builder struct {
 	input inputValue[int8]
 }
 
-func (b int8Builder) Int2() (pgtype.Int2, error) {
-	return int2Value(int64(b.input.value), b.input.present)
+func (b int8Builder) Int2() pgtype.Int2 {
+	if !b.input.present {
+		return pgtype.Int2{}
+	}
+	return pgtype.Int2{Int16: int16(b.input.value), Valid: true}
 }
 
-func (b int8Builder) Int4() (pgtype.Int4, error) {
-	return int4Value(int64(b.input.value), b.input.present)
+func (b int8Builder) Int4() pgtype.Int4 {
+	if !b.input.present {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(b.input.value), Valid: true}
 }
 
 func (b int8Builder) Int8() pgtype.Int8 {
@@ -103,12 +109,18 @@ type int16Builder struct {
 	input inputValue[int16]
 }
 
-func (b int16Builder) Int2() (pgtype.Int2, error) {
-	return int2Value(int64(b.input.value), b.input.present)
+func (b int16Builder) Int2() pgtype.Int2 {
+	if !b.input.present {
+		return pgtype.Int2{}
+	}
+	return pgtype.Int2{Int16: b.input.value, Valid: true}
 }
 
-func (b int16Builder) Int4() (pgtype.Int4, error) {
-	return int4Value(int64(b.input.value), b.input.present)
+func (b int16Builder) Int4() pgtype.Int4 {
+	if !b.input.present {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(b.input.value), Valid: true}
 }
 
 func (b int16Builder) Int8() pgtype.Int8 {
@@ -123,8 +135,11 @@ func (b int32Builder) Int2() (pgtype.Int2, error) {
 	return int2Value(int64(b.input.value), b.input.present)
 }
 
-func (b int32Builder) Int4() (pgtype.Int4, error) {
-	return int4Value(int64(b.input.value), b.input.present)
+func (b int32Builder) Int4() pgtype.Int4 {
+	if !b.input.present {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: b.input.value, Valid: true}
 }
 
 func (b int32Builder) Int8() pgtype.Int8 {
