@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
     strategy:
       fail-fast: false
       matrix:
