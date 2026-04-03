@@ -8,6 +8,48 @@ import (
 	"github.com/omniaura/go-kit/set"
 )
 
+func TestSyncSet_ClaimAddsMissingKey(t *testing.T) {
+	t.Run("adds missing key", func(t *testing.T) {
+		s := set.NewSync[string]()
+
+		if got := s.Claim("a"); !got {
+			t.Fatalf("Claim(%q) = %v, want true", "a", got)
+		}
+		if got := s.Len(); got != 1 {
+			t.Fatalf("Len() = %d, want 1", got)
+		}
+		if !s.Contains("a") {
+			t.Fatalf("Contains(%q) = false, want true", "a")
+		}
+	})
+
+	t.Run("does not add existing key", func(t *testing.T) {
+		s := set.NewSync[string]()
+		s.Add("a")
+
+		if got := s.Claim("a"); got {
+			t.Fatalf("Claim(%q) = %v, want false", "a", got)
+		}
+		if got := s.Len(); got != 1 {
+			t.Fatalf("Len() = %d, want 1", got)
+		}
+	})
+}
+
+func TestSyncSet_Claim(t *testing.T) {
+	s := set.NewSync[string]()
+
+	if got := s.Claim("job-1"); !got {
+		t.Fatalf("Claim(%q) = %v, want true", "job-1", got)
+	}
+	if got := s.Claim("job-1"); got {
+		t.Fatalf("Claim(%q) = %v, want false", "job-1", got)
+	}
+	if got := s.Len(); got != 1 {
+		t.Fatalf("Len() = %d, want 1", got)
+	}
+}
+
 func TestSyncSet_AddContains(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -289,4 +331,44 @@ func TestSyncSet_Concurrent(t *testing.T) {
 
 	// Should complete without race conditions
 	// Final state is non-deterministic due to concurrent add/remove
+}
+
+func TestSyncSet_ClaimConcurrent(t *testing.T) {
+	s := set.NewSync[string]()
+	const numGoroutines = 128
+
+	start := make(chan struct{})
+	results := make(chan bool, numGoroutines)
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for range numGoroutines {
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- s.Claim("request-1")
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var won int
+	for result := range results {
+		if result {
+			won++
+		}
+	}
+
+	if won != 1 {
+		t.Fatalf("Claim() winners = %d, want 1", won)
+	}
+	if !s.Contains("request-1") {
+		t.Fatalf("Contains(%q) = false, want true", "request-1")
+	}
+	if got := s.Len(); got != 1 {
+		t.Fatalf("Len() = %d, want 1", got)
+	}
 }
