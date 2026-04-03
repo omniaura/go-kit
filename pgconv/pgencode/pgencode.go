@@ -52,6 +52,20 @@ func int8Value(value int64, present bool) pgtype.Int8 {
 	return pgtype.Int8{Int64: value, Valid: true}
 }
 
+func int2TruncatedValue(value int64, present bool) pgtype.Int2 {
+	if !present {
+		return pgtype.Int2{}
+	}
+	return pgtype.Int2{Int16: int16(value), Valid: true}
+}
+
+func int4TruncatedValue(value int64, present bool) pgtype.Int4 {
+	if !present {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(value), Valid: true}
+}
+
 type stringBuilder struct {
 	input       inputValue[string]
 	emptyIsNull bool
@@ -87,12 +101,12 @@ type int8Builder struct {
 	input inputValue[int8]
 }
 
-func (b int8Builder) Int2() (pgtype.Int2, error) {
-	return int2Value(int64(b.input.value), b.input.present)
+func (b int8Builder) Int2() pgtype.Int2 {
+	return int2TruncatedValue(int64(b.input.value), b.input.present)
 }
 
-func (b int8Builder) Int4() (pgtype.Int4, error) {
-	return int4Value(int64(b.input.value), b.input.present)
+func (b int8Builder) Int4() pgtype.Int4 {
+	return int4TruncatedValue(int64(b.input.value), b.input.present)
 }
 
 func (b int8Builder) Int8() pgtype.Int8 {
@@ -103,12 +117,12 @@ type int16Builder struct {
 	input inputValue[int16]
 }
 
-func (b int16Builder) Int2() (pgtype.Int2, error) {
-	return int2Value(int64(b.input.value), b.input.present)
+func (b int16Builder) Int2() pgtype.Int2 {
+	return int2TruncatedValue(int64(b.input.value), b.input.present)
 }
 
-func (b int16Builder) Int4() (pgtype.Int4, error) {
-	return int4Value(int64(b.input.value), b.input.present)
+func (b int16Builder) Int4() pgtype.Int4 {
+	return int4TruncatedValue(int64(b.input.value), b.input.present)
 }
 
 func (b int16Builder) Int8() pgtype.Int8 {
@@ -119,12 +133,16 @@ type int32Builder struct {
 	input inputValue[int32]
 }
 
-func (b int32Builder) Int2() (pgtype.Int2, error) {
+func (b int32Builder) Int2() pgtype.Int2 {
+	return int2TruncatedValue(int64(b.input.value), b.input.present)
+}
+
+func (b int32Builder) TryInt2() (pgtype.Int2, error) {
 	return int2Value(int64(b.input.value), b.input.present)
 }
 
-func (b int32Builder) Int4() (pgtype.Int4, error) {
-	return int4Value(int64(b.input.value), b.input.present)
+func (b int32Builder) Int4() pgtype.Int4 {
+	return int4TruncatedValue(int64(b.input.value), b.input.present)
 }
 
 func (b int32Builder) Int8() pgtype.Int8 {
@@ -135,11 +153,19 @@ type int64Builder struct {
 	input inputValue[int64]
 }
 
-func (b int64Builder) Int2() (pgtype.Int2, error) {
+func (b int64Builder) Int2() pgtype.Int2 {
+	return int2TruncatedValue(b.input.value, b.input.present)
+}
+
+func (b int64Builder) TryInt2() (pgtype.Int2, error) {
 	return int2Value(b.input.value, b.input.present)
 }
 
-func (b int64Builder) Int4() (pgtype.Int4, error) {
+func (b int64Builder) Int4() pgtype.Int4 {
+	return int4TruncatedValue(b.input.value, b.input.present)
+}
+
+func (b int64Builder) TryInt4() (pgtype.Int4, error) {
 	return int4Value(b.input.value, b.input.present)
 }
 
@@ -151,11 +177,19 @@ type intBuilder struct {
 	input inputValue[int]
 }
 
-func (b intBuilder) Int2() (pgtype.Int2, error) {
+func (b intBuilder) Int2() pgtype.Int2 {
+	return int2TruncatedValue(int64(b.input.value), b.input.present)
+}
+
+func (b intBuilder) TryInt2() (pgtype.Int2, error) {
 	return int2Value(int64(b.input.value), b.input.present)
 }
 
-func (b intBuilder) Int4() (pgtype.Int4, error) {
+func (b intBuilder) Int4() pgtype.Int4 {
+	return int4TruncatedValue(int64(b.input.value), b.input.present)
+}
+
+func (b intBuilder) TryInt4() (pgtype.Int4, error) {
 	return int4Value(int64(b.input.value), b.input.present)
 }
 

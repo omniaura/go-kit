@@ -180,14 +180,14 @@ func (b int2Builder) Fill(ptr *int16) {
 	}
 }
 
-func (b int2Builder) Int() intBuilder {
-	return intBuilder{
-		resolve: func() (int, bool, error) {
+func (b int2Builder) Int() safeIntBuilder {
+	return safeIntBuilder{
+		resolve: func() (int, bool) {
 			value, ok := b.value.resolve(0)
 			if !ok {
-				return 0, false, nil
+				return 0, false
 			}
-			return int(value), true, nil
+			return int(value), true
 		},
 	}
 }
@@ -220,14 +220,14 @@ func (b int4Builder) Fill(ptr *int32) {
 	}
 }
 
-func (b int4Builder) Int() intBuilder {
-	return intBuilder{
-		resolve: func() (int, bool, error) {
+func (b int4Builder) Int() safeIntBuilder {
+	return safeIntBuilder{
+		resolve: func() (int, bool) {
 			value, ok := b.value.resolve(0)
 			if !ok {
-				return 0, false, nil
+				return 0, false
 			}
-			return int(value), true, nil
+			return int(value), true
 		},
 	}
 }
@@ -260,7 +260,19 @@ func (b int8Builder) Fill(ptr *int64) {
 	}
 }
 
-func (b int8Builder) Int() intBuilder {
+func (b int8Builder) Int() safeIntBuilder {
+	return safeIntBuilder{
+		resolve: func() (int, bool) {
+			value, ok := b.value.resolve(0)
+			if !ok {
+				return 0, false
+			}
+			return int(value), true
+		},
+	}
+}
+
+func (b int8Builder) TryInt() intBuilder {
 	return intBuilder{
 		resolve: func() (int, bool, error) {
 			value, ok := b.value.resolve(0)
@@ -279,6 +291,48 @@ type intBuilder struct {
 	fallback    int
 	hasFallback bool
 	resolve     func() (int, bool, error)
+}
+
+type safeIntBuilder struct {
+	fallback    int
+	hasFallback bool
+	resolve     func() (int, bool)
+}
+
+func (b safeIntBuilder) Fallback(value int) safeIntBuilder {
+	b.fallback = value
+	b.hasFallback = true
+	return b
+}
+
+func (b safeIntBuilder) resolved() (int, bool) {
+	value, ok := b.resolve()
+	if ok {
+		return value, true
+	}
+	if b.hasFallback {
+		return b.fallback, true
+	}
+	return 0, false
+}
+
+func (b safeIntBuilder) Value() int {
+	value, _ := b.resolved()
+	return value
+}
+
+func (b safeIntBuilder) Ptr() *int {
+	value, ok := b.resolved()
+	if !ok {
+		return nil
+	}
+	return ptrOf(value)
+}
+
+func (b safeIntBuilder) Fill(ptr *int) {
+	if value, ok := b.resolved(); ok {
+		*ptr = value
+	}
 }
 
 func (b intBuilder) Fallback(value int) intBuilder {

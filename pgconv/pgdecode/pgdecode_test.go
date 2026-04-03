@@ -61,31 +61,38 @@ func TestBoolAndIntegers(t *testing.T) {
 	if got := pgdecode.Int2(pgtype.Int2{Int16: 7, Valid: true}).Value(); got != 7 {
 		t.Fatalf("Int2.Value() = %d", got)
 	}
-	intValue, err := pgdecode.Int2(pgtype.Int2{Int16: 8, Valid: true}).Int().Value()
-	if err != nil || intValue != 8 {
-		t.Fatalf("Int2.Int().Value() = %d, %v", intValue, err)
+	intValue := pgdecode.Int2(pgtype.Int2{Int16: 8, Valid: true}).Int().Value()
+	if intValue != 8 {
+		t.Fatalf("Int2.Int().Value() = %d", intValue)
 	}
 
 	if got := pgdecode.Int4(pgtype.Int4{Int32: 17, Valid: true}).Value(); got != 17 {
 		t.Fatalf("Int4.Value() = %d", got)
 	}
-	intValue, err = pgdecode.Int4(pgtype.Int4{Int32: 18, Valid: true}).Int().Value()
-	if err != nil || intValue != 18 {
-		t.Fatalf("Int4.Int().Value() = %d, %v", intValue, err)
+	intValue = pgdecode.Int4(pgtype.Int4{Int32: 18, Valid: true}).Int().Value()
+	if intValue != 18 {
+		t.Fatalf("Int4.Int().Value() = %d", intValue)
 	}
 
 	if got := pgdecode.Int8(pgtype.Int8{Int64: 19, Valid: true}).Value(); got != 19 {
 		t.Fatalf("Int8.Value() = %d", got)
 	}
-	ptr, err := pgdecode.Int8(pgtype.Int8{Int64: 20, Valid: true}).Int().Ptr()
-	if err != nil || ptr == nil || *ptr != 20 {
-		t.Fatalf("Int8.Int().Ptr() = %#v, %v", ptr, err)
+	ptr := pgdecode.Int8(pgtype.Int8{Int64: 20, Valid: true}).Int().Ptr()
+	if ptr == nil || *ptr != 20 {
+		t.Fatalf("Int8.Int().Ptr() = %#v", ptr)
+	}
+	tryPtr, err := pgdecode.Int8(pgtype.Int8{Int64: 20, Valid: true}).TryInt().Ptr()
+	if err != nil || tryPtr == nil || *tryPtr != 20 {
+		t.Fatalf("Int8.TryInt().Ptr() = %#v, %v", tryPtr, err)
 	}
 
 	if bits.UintSize == 32 {
 		tooLarge := int64(math.MaxInt32) + 1
-		if _, err := pgdecode.Int8(pgtype.Int8{Int64: tooLarge, Valid: true}).Int().Value(); err == nil {
-			t.Fatal("Int8.Int().Value() expected overflow error on 32-bit")
+		if got := pgdecode.Int8(pgtype.Int8{Int64: tooLarge, Valid: true}).Int().Value(); got != math.MinInt32 {
+			t.Fatalf("Int8(truncate).Int().Value() = %d", got)
+		}
+		if _, err := pgdecode.Int8(pgtype.Int8{Int64: tooLarge, Valid: true}).TryInt().Value(); err == nil {
+			t.Fatal("Int8.TryInt().Value() expected overflow error on 32-bit")
 		}
 	}
 }
