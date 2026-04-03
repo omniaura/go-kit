@@ -1,6 +1,7 @@
 package pgencode_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -52,11 +53,17 @@ func TestIntegers(t *testing.T) {
 	if got := pgencode.Int32(9).Int4(); !got.Valid || got.Int32 != 9 {
 		t.Fatalf("Int32().Int4() = %#v", got)
 	}
+	if got := pgencode.Int32(1 << 15).Int2(); !got.Valid || got.Int16 != math.MinInt16 {
+		t.Fatalf("Int32(truncate).Int2() = %#v", got)
+	}
 	if got := pgencode.Int32(9).Int8(); !got.Valid || got.Int64 != 9 {
 		t.Fatalf("Int32().Int8() = %#v", got)
 	}
 	if got := pgencode.Int64(10).Int8(); !got.Valid || got.Int64 != 10 {
 		t.Fatalf("Int64().Int8() = %#v", got)
+	}
+	if got := pgencode.Int64(1 << 31).Int4(); !got.Valid || got.Int32 != math.MinInt32 {
+		t.Fatalf("Int64(truncate).Int4() = %#v", got)
 	}
 	if got := pgencode.Int(11).Int8(); !got.Valid || got.Int64 != 11 {
 		t.Fatalf("Int().Int8() = %#v", got)
@@ -65,11 +72,11 @@ func TestIntegers(t *testing.T) {
 		t.Fatalf("IntPtr(nil).Int8() = %#v", got)
 	}
 
-	if _, err := pgencode.Int32(1 << 20).Int2(); err == nil {
-		t.Fatal("Int32().Int2() expected overflow error")
+	if _, err := pgencode.Int32(1 << 20).TryInt2(); err == nil {
+		t.Fatal("Int32().TryInt2() expected overflow error")
 	}
-	if _, err := pgencode.Int64(1 << 40).Int4(); err == nil {
-		t.Fatal("Int64().Int4() expected overflow error")
+	if _, err := pgencode.Int64(1 << 40).TryInt4(); err == nil {
+		t.Fatal("Int64().TryInt4() expected overflow error")
 	}
 }
 

@@ -260,7 +260,19 @@ func (b int8Builder) Fill(ptr *int64) {
 	}
 }
 
-func (b int8Builder) Int() intBuilder {
+func (b int8Builder) Int() safeIntBuilder {
+	return safeIntBuilder{
+		resolve: func() (int, bool) {
+			value, ok := b.value.resolve(0)
+			if !ok {
+				return 0, false
+			}
+			return int(value), true
+		},
+	}
+}
+
+func (b int8Builder) TryInt() intBuilder {
 	return intBuilder{
 		resolve: func() (int, bool, error) {
 			value, ok := b.value.resolve(0)
