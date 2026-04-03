@@ -15,8 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         go-version:
-          - '1.24.10'
-          - '1.25.4'
+          - '1.25.5'
           - '1.26.1'
 
     steps:
