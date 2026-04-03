@@ -66,6 +66,20 @@ func (s *SyncSet[T]) Missing(key T) bool {
 	return s.set.Missing(key)
 }
 
+// Claim attempts to take ownership of a key.
+// It returns true if this call inserted the key and false if it was already present.
+func (s *SyncSet[T]) Claim(key T) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.set.Contains(key) {
+		return false
+	}
+
+	s.set.Add(key)
+	return true
+}
+
 // Slice returns the keys of the set as a slice.
 func (s *SyncSet[T]) Slice() []T {
 	s.mu.RLock()
