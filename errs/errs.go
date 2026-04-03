@@ -3,6 +3,7 @@ package errs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -73,6 +74,14 @@ func (e *Error) Message() string {
 	return b.String()
 }
 
+func (e *Error) Title() string {
+	title := http.StatusText(int(e.Status))
+	if title != "" {
+		return title
+	}
+	return e.message.h.Value()
+}
+
 func (e *Error) Error() string {
 	return fmt.Sprintf("status code: %d, message: %s", e.Status, e.Message())
 }
@@ -97,10 +106,12 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 	if e == nil {
 		return false
 	}
+	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(int(e.Status))
-	var buf bytes.Buffer
-	e.marshalJSONBuffer(&buf)
-	buf.WriteTo(w)
+	data, err := json.Marshal(e)
+	if err == nil {
+		_, _ = w.Write(data)
+	}
 	msg := "request aborted: " + e.message.h.Value()
 	e.event.Int("status", int(e.Status)).Msg(msg)
 	return true
