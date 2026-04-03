@@ -2,6 +2,8 @@ module github.com/omniaura/go-kit/errs
 
 go 1.25.5
 
+toolchain go1.26.1
+
 require github.com/rs/zerolog v1.34.0
 
 require (
