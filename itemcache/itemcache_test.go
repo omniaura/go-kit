@@ -1,7 +1,6 @@
 package itemcache_test
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -172,8 +171,7 @@ func TestItemCache_Get(t *testing.T) {
 // cleanup routine runs, relying on the race detector (go test -race) to catch
 // unsynchronized access to the shared item.
 func TestItemCache_Concurrent(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ic, err := itemcache.New[int](
 		itemcache.WithTTL(time.Millisecond),
@@ -215,8 +213,7 @@ func TestItemCache_Concurrent(t *testing.T) {
 }
 
 func TestItemCache_Cleanup(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ic, err := itemcache.New[int](
 		itemcache.WithTTL(100*time.Millisecond),
