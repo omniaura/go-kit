@@ -6,6 +6,7 @@ use (
 	./cmd/monotag
 	./convert
 	./errs
+	./itemcache
 	./mapcache
 	./net
 	./pgconv
