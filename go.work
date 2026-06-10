@@ -12,6 +12,7 @@ use (
 	./net
 	./pgconv
 	./set
+	./shutdown
 	./slicer
 	./sqlconv
 	./tasker
