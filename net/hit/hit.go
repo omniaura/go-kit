@@ -30,14 +30,19 @@ type Cache interface {
 	Get(ctx context.Context, key string, up func() (any, error)) (any, error)
 }
 
+// SWRCache is implemented by caches that support stale-while-revalidate reads.
+type SWRCache interface {
+	GetSWR(ctx context.Context, key string, up func(context.Context) (any, error)) (any, error)
+}
+
 // MapCache is a Cache implementation backed by mapcache.MapCache.
 type MapCache struct {
 	mc *mapcache.MapCache[string, any]
 }
 
 // NewMapCache creates a new in-memory cache backed by mapcache.
-func NewMapCache() (*MapCache, error) {
-	mc, err := mapcache.New[string, any]()
+func NewMapCache(opts ...mapcache.OptFunc) (*MapCache, error) {
+	mc, err := mapcache.New[string, any](opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -49,23 +54,36 @@ func (c *MapCache) Get(ctx context.Context, key string, up func() (any, error)) 
 	return c.mc.Get(key, up)
 }
 
+// GetSWR implements SWRCache.
+func (c *MapCache) GetSWR(
+	ctx context.Context,
+	key string,
+	up func(context.Context) (any, error),
+) (any, error) {
+	return c.mc.GetSWR(ctx, key, up)
+}
+
 // Request is an HTTP request builder. All fields are private; configuration
 // happens through the builder methods. The type parameter Out is the expected
 // response type.
 type Request[Out any] struct {
-	method    string
-	url       string
-	baseURL   string
-	path      string
-	queries   url.Values
-	headers   http.Header
-	body      []byte
-	timeout   time.Duration
-	client    *http.Client
-	fallback  []byte
-	cache     Cache
-	cacheKey  string
-	cacheable bool
+	method        string
+	url           string
+	baseURL       string
+	path          string
+	queries       url.Values
+	headers       http.Header
+	body          []byte
+	timeout       time.Duration
+	client        *http.Client
+	fallback      []byte
+	cache         Cache
+	cacheKey      string
+	cacheable     bool
+	cacheSWR      bool
+	retryPolicy   errs.RetryPolicy
+	retrySet      bool
+	statusRetries errs.StatusRetryPolicy
 }
 
 // GET creates a new GET request builder for the given output type.
@@ -295,10 +313,46 @@ func (r *Request[Out]) WithCacheKey(key string) *Request[Out] {
 	return r
 }
 
+// WithCacheSWR enables stale-while-revalidate reads when the configured cache
+// implements SWRCache.
+func (r *Request[Out]) WithCacheSWR() *Request[Out] {
+	r.cacheSWR = true
+	return r
+}
+
 // Cacheable toggles whether the request may be cached. GET requests are
 // cacheable by default; other methods are not.
 func (r *Request[Out]) Cacheable(v bool) *Request[Out] {
 	r.cacheable = v
+	return r
+}
+
+// WithRetryPolicy configures a fallback retry policy for request errors.
+func (r *Request[Out]) WithRetryPolicy(policy errs.RetryPolicy) *Request[Out] {
+	r.retryPolicy = policy
+	r.retrySet = true
+	return r
+}
+
+// WithStatusRetry configures retry metadata for a specific HTTP status code.
+func (r *Request[Out]) WithStatusRetry(status int, policy errs.RetryPolicy) *Request[Out] {
+	if r.statusRetries == nil {
+		r.statusRetries = make(errs.StatusRetryPolicy)
+	}
+	r.statusRetries[status] = policy
+	return r
+}
+
+// WithStatusRetryPolicy configures status-code retry metadata.
+func (r *Request[Out]) WithStatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out] {
+	if len(policy) == 0 {
+		r.statusRetries = nil
+		return r
+	}
+	r.statusRetries = make(errs.StatusRetryPolicy, len(policy))
+	for status, retry := range policy {
+		r.statusRetries[status] = retry
+	}
 	return r
 }
 
@@ -372,9 +426,7 @@ func (r *Request[Out]) Do(ctx context.Context, out *Out) error {
 
 	if r.cache != nil && r.cacheable {
 		key := r.cacheKeyValue()
-		cached, err := r.cache.Get(ctx, key, func() (any, error) {
-			return r.execute(ctx, u, out)
-		})
+		cached, err := r.cached(ctx, key, u)
 		if err != nil {
 			return err
 		}
@@ -389,16 +441,57 @@ func (r *Request[Out]) Do(ctx context.Context, out *Out) error {
 		return r.fail(ctx, out, errs.AsError(ctx, fmt.Errorf("cache type mismatch")))
 	}
 
-	_, err = r.execute(ctx, u, out)
+	_, err = r.fetch(ctx, u, out)
 	return err
 }
 
-// execute performs the HTTP request and decodes the response. It returns the
+func (r *Request[Out]) cached(ctx context.Context, key, u string) (any, error) {
+	fetch := func(fetchCtx context.Context) (any, error) {
+		var value Out
+		return r.fetch(fetchCtx, u, &value)
+	}
+	if r.cacheSWR {
+		if cache, ok := r.cache.(SWRCache); ok {
+			return cache.GetSWR(ctx, key, fetch)
+		}
+	}
+	return r.cache.Get(ctx, key, func() (any, error) {
+		return fetch(ctx)
+	})
+}
+
+func (r *Request[Out]) fetch(ctx context.Context, u string, out *Out) (any, error) {
+	if _, err := r.executeWithRetry(ctx, u, out); err != nil {
+		if err := r.fail(ctx, out, err); err != nil {
+			return nil, err
+		}
+	}
+	return *out, nil
+}
+
+func (r *Request[Out]) executeWithRetry(ctx context.Context, u string, out *Out) (any, error) {
+	for attempt := 1; ; attempt++ {
+		value, err := r.execute(ctx, u, out)
+		if err == nil {
+			return value, nil
+		}
+
+		policy, ok := errs.RetryPolicyOf(err)
+		if !ok || !policy.ShouldRetry(attempt) {
+			return nil, err
+		}
+		if err := policy.Wait(ctx, attempt); err != nil {
+			return nil, r.error(ctx, err)
+		}
+	}
+}
+
+// execute performs one HTTP request and decodes the response. It returns the
 // decoded value so it can be stored in caches that store any values.
 func (r *Request[Out]) execute(ctx context.Context, u string, out *Out) (any, error) {
 	req, err := http.NewRequestWithContext(ctx, r.method, u, bytes.NewReader(r.body))
 	if err != nil {
-		return nil, r.fail(ctx, out, errs.AsError(ctx, err))
+		return nil, r.error(ctx, err)
 	}
 	for key, values := range r.headers {
 		for _, v := range values {
@@ -419,20 +512,17 @@ func (r *Request[Out]) execute(ctx context.Context, u string, out *Out) (any, er
 
 	rsp, err := client.Do(req)
 	if err != nil {
-		return nil, r.fail(ctx, out, errs.AsError(ctx, err))
+		return nil, r.error(ctx, err)
 	}
 	defer rsp.Body.Close()
 
 	body, err := io.ReadAll(rsp.Body)
 	if err != nil {
-		return nil, r.fail(ctx, out, errs.AsError(ctx, err))
+		return nil, r.error(ctx, err)
 	}
 
 	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
-		err := errs.NewFactory(rsp.StatusCode, "http request failed").
-			New(ctx).
-			Err(fmt.Errorf("status %d: %s", rsp.StatusCode, string(body)))
-		return nil, r.fail(ctx, out, err)
+		return nil, r.statusError(ctx, rsp.StatusCode, body)
 	}
 
 	if len(body) == 0 {
@@ -440,9 +530,37 @@ func (r *Request[Out]) execute(ctx context.Context, u string, out *Out) (any, er
 	}
 
 	if err := json.Unmarshal(body, out); err != nil {
-		return nil, r.fail(ctx, out, errs.AsError(ctx, err))
+		return nil, r.error(ctx, err)
 	}
 	return *out, nil
+}
+
+func (r *Request[Out]) error(ctx context.Context, err error) *errs.Error {
+	e := errs.AsError(ctx, err)
+	if r.retrySet {
+		e.WithRetryPolicy(r.retryPolicy)
+	}
+	return e
+}
+
+func (r *Request[Out]) statusError(ctx context.Context, status int, body []byte) *errs.Error {
+	err := errs.NewFactory(status, "http request failed").
+		New(ctx).
+		Err(fmt.Errorf("status %d: %s", status, string(body)))
+	if policy, ok := r.retryPolicyForStatus(status); ok {
+		err.WithRetryPolicy(policy)
+	}
+	return err
+}
+
+func (r *Request[Out]) retryPolicyForStatus(status int) (errs.RetryPolicy, bool) {
+	if policy, ok := r.statusRetries.ForStatus(status); ok {
+		return policy, true
+	}
+	if r.retrySet {
+		return r.retryPolicy, true
+	}
+	return errs.RetryPolicy{}, false
 }
 
 // fail attempts to populate out from the configured fallback. If no fallback

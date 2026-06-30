@@ -11,10 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/omniaura/go-kit/errs"
+	"github.com/omniaura/go-kit/mapcache"
 	"github.com/omniaura/go-kit/net/hit"
 )
 
@@ -235,6 +237,79 @@ func TestGET_WithCacheKey(t *testing.T) {
 	}
 }
 
+func TestGET_CacheSWR(t *testing.T) {
+	var calls atomic.Int64
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call == 2 {
+			close(started)
+			select {
+			case <-r.Context().Done():
+				return
+			case <-release:
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(testItem{ID: int(call)})
+	}))
+	defer server.Close()
+
+	cache, err := hit.NewMapCache(mapcache.WithTTL(time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	var out testItem
+	if err := hit.GET[testItem](server.URL).
+		WithCache(cache).
+		WithCacheSWR().
+		Do(ctx, &out); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.ID != 1 {
+		t.Fatalf("expected first response ID 1, got %+v", out)
+	}
+
+	time.Sleep(5 * time.Millisecond)
+
+	out = testItem{}
+	if err := hit.GET[testItem](server.URL).
+		WithCache(cache).
+		WithCacheSWR().
+		Do(ctx, &out); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.ID != 1 {
+		t.Fatalf("expected stale response ID 1, got %+v", out)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background refresh")
+	}
+	close(release)
+
+	for range 20 {
+		out = testItem{}
+		if err := hit.GET[testItem](server.URL).
+			WithCache(cache).
+			WithCacheSWR().
+			Do(ctx, &out); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if out.ID == 2 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("expected refreshed response ID 2, got %+v", out)
+}
+
 func TestFallback_Static(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -379,6 +454,66 @@ func TestErrs_Non2xx(t *testing.T) {
 	}
 	if e.Status != http.StatusNotFound {
 		t.Fatalf("expected status 404, got %d", e.Status)
+	}
+}
+
+func TestRetry_StatusPolicy(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if call < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("slow down"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(testItem{ID: int(call)})
+	}))
+	defer server.Close()
+
+	var out testItem
+	err := hit.GET[testItem](server.URL).
+		WithStatusRetry(
+			http.StatusTooManyRequests,
+			errs.ExponentialRetry(3, time.Millisecond, 5*time.Millisecond),
+		).
+		Do(context.Background(), &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.ID != 3 {
+		t.Fatalf("expected third response, got %+v", out)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("expected 3 calls, got %d", got)
+	}
+}
+
+func TestRetry_StatusPolicyOverridesDefault(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	var out testItem
+	err := hit.GET[testItem](server.URL).
+		WithRetryPolicy(errs.FixedRetry(3, time.Millisecond)).
+		WithStatusRetry(http.StatusBadRequest, errs.NeverRetry()).
+		Do(context.Background(), &out)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected one non-retryable request, got %d", got)
+	}
+	policy, ok := errs.RetryPolicyOf(err)
+	if !ok {
+		t.Fatal("expected retry metadata on status error")
+	}
+	if policy.Retryable {
+		t.Fatalf("expected non-retryable policy, got %+v", policy)
 	}
 }
 

@@ -23,6 +23,8 @@ type Error struct {
 	message        errorMessage
 	Status         uint16
 	b              bytes.Buffer
+	retry          RetryPolicy
+	retrySet       bool
 }
 
 type errorMessage struct {
@@ -75,6 +77,21 @@ func (e *Error) Message() string {
 
 func (e *Error) Error() string {
 	return fmt.Sprintf("status code: %d, message: %s", e.Status, e.Message())
+}
+
+// WithRetryPolicy attaches retry metadata to e.
+func (e *Error) WithRetryPolicy(policy RetryPolicy) *Error {
+	e.retry = policy
+	e.retrySet = true
+	return e
+}
+
+// RetryPolicy returns the retry metadata attached to e.
+func (e *Error) RetryPolicy() (RetryPolicy, bool) {
+	if e == nil || !e.retrySet {
+		return RetryPolicy{}, false
+	}
+	return e.retry, true
 }
 
 // Abort handles error responses in HTTP handlers.
