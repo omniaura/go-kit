@@ -9,9 +9,11 @@ import (
 )
 
 type ErrorFactory struct {
-	message errorMessage
-	status  uint16
-	level   zerolog.Level
+	message  errorMessage
+	status   uint16
+	level    zerolog.Level
+	retry    RetryPolicy
+	retrySet bool
 }
 
 func NewFactory(statusCode int, msg string, opts ...optFunc) ErrorFactory {
@@ -22,19 +24,23 @@ func NewFactory(statusCode int, msg string, opts ...optFunc) ErrorFactory {
 		opt(&o)
 	}
 	return ErrorFactory{
-		message: errorMessage{h: unique.Make(msg)},
-		status:  uint16(statusCode),
-		level:   o.level,
+		message:  errorMessage{h: unique.Make(msg)},
+		status:   uint16(statusCode),
+		level:    o.level,
+		retry:    o.retry,
+		retrySet: o.retrySet,
 	}
 }
 
 func (f ErrorFactory) New(ctx context.Context) *Error {
 	event := zerolog.Ctx(ctx).WithLevel(f.level)
 	return &Error{
-		Status:  f.status,
-		message: f.message,
-		ctx:     ctx,
-		event:   event,
+		Status:   f.status,
+		message:  f.message,
+		ctx:      ctx,
+		event:    event,
+		retry:    f.retry,
+		retrySet: f.retrySet,
 	}
 }
 

@@ -3,6 +3,7 @@ package mapcache_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -223,5 +224,185 @@ func TestMapCache_All(t *testing.T) {
 
 	if count != len(items) {
 		t.Errorf("expected %d items, got %d", len(items), count)
+	}
+}
+
+func TestMapCache_At(t *testing.T) {
+	mc, err := mapcache.New[string, int]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := mc.At("missing"); ok {
+		t.Fatal("expected missing key")
+	}
+
+	if _, err := mc.Get("key", func() (int, error) { return 42, nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	item, ok := mc.At("key")
+	if !ok {
+		t.Fatal("expected cached item")
+	}
+	if item.V != 42 {
+		t.Fatalf("expected 42, got %d", item.V)
+	}
+}
+
+func TestMapCache_GetSWRReturnsStaleAndRefreshes(t *testing.T) {
+	mc, err := mapcache.New[string, int](mapcache.WithTTL(time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mc.Get("key", func() (int, error) { return 1, nil }); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	stale := make(chan mapcache.Item[int], 1)
+	refreshed := make(chan mapcache.Item[int], 1)
+	var calls atomic.Int64
+
+	val, err := mc.GetSWR(
+		context.Background(),
+		"key",
+		func(ctx context.Context) (int, error) {
+			calls.Add(1)
+			close(started)
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-release:
+				return 2, nil
+			}
+		},
+		mapcache.WithOnStale(func(key string, item mapcache.Item[int]) {
+			if key != "key" {
+				t.Errorf("unexpected stale key: %s", key)
+			}
+			stale <- item
+		}),
+		mapcache.WithOnRefresh(func(key string, item mapcache.Item[int]) {
+			if key != "key" {
+				t.Errorf("unexpected refresh key: %s", key)
+			}
+			refreshed <- item
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != 1 {
+		t.Fatalf("expected stale value 1, got %d", val)
+	}
+
+	select {
+	case item := <-stale:
+		if item.V != 1 {
+			t.Fatalf("expected stale hook value 1, got %d", item.V)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale hook")
+	}
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for refresh start")
+	}
+
+	item, ok := mc.At("key")
+	if !ok || item.V != 1 {
+		t.Fatalf("expected stale cached value, got %+v ok=%v", item, ok)
+	}
+
+	close(release)
+	select {
+	case item := <-refreshed:
+		if item.V != 2 {
+			t.Fatalf("expected refreshed value 2, got %d", item.V)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for refresh")
+	}
+
+	item, ok = mc.At("key")
+	if !ok || item.V != 2 {
+		t.Fatalf("expected refreshed cached value, got %+v ok=%v", item, ok)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected 1 refresh call, got %d", got)
+	}
+}
+
+func TestMapCache_GetSWRDeduplicatesRefresh(t *testing.T) {
+	mc, err := mapcache.New[string, int](mapcache.WithTTL(time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mc.Get("key", func() (int, error) { return 1, nil }); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	refreshed := make(chan mapcache.Item[int], 1)
+	var calls atomic.Int64
+	up := func(ctx context.Context) (int, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-release:
+			return 2, nil
+		}
+	}
+
+	for range 2 {
+		val, err := mc.GetSWR(
+			context.Background(),
+			"key",
+			up,
+			mapcache.WithOnRefresh(func(key string, item mapcache.Item[int]) {
+				refreshed <- item
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if val != 1 {
+			t.Fatalf("expected stale value 1, got %d", val)
+		}
+		select {
+		case <-started:
+		default:
+		}
+	}
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for refresh start")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected one in-flight refresh, got %d", got)
+	}
+
+	close(release)
+	select {
+	case item := <-refreshed:
+		if item.V != 2 {
+			t.Fatalf("expected refreshed value 2, got %d", item.V)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for refresh")
 	}
 }
