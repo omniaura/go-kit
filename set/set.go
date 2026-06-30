@@ -8,10 +8,17 @@ func New[T comparable](opts ...optFunc) Set[T] {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	if o.capacity > 0 {
-		return make(Set[T], o.capacity)
+
+	capacity := o.capacity
+	if o.keysLen > capacity {
+		capacity = o.keysLen
 	}
-	return make(Set[T])
+
+	s := make(Set[T], capacity)
+	if o.addKeys != nil {
+		o.addKeys(s)
+	}
+	return s
 }
 
 // Add adds a key to the set.
