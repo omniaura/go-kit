@@ -654,6 +654,98 @@ func (b numericInt64Builder) Fill(ptr *int64) error {
 	return nil
 }
 
+// AppendValid appends the decoded value to dst and returns the result when the
+// source is non-NULL (or a Fallback was set); otherwise dst is returned
+// unchanged. It collapses the common `if v.Valid { s = append(s, v.T) }` guard
+// into a single expression, mirroring Fill's write-only-when-valid semantics.
+func (b textBuilder) AppendValid(dst []string) []string {
+	if value, ok := b.value.resolve(""); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is non-NULL.
+func (b boolBuilder) AppendValid(dst []bool) []bool {
+	if value, ok := b.value.resolve(false); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is non-NULL.
+func (b int2Builder) AppendValid(dst []int16) []int16 {
+	if value, ok := b.value.resolve(0); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is non-NULL.
+func (b int4Builder) AppendValid(dst []int32) []int32 {
+	if value, ok := b.value.resolve(0); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is non-NULL.
+func (b int8Builder) AppendValid(dst []int64) []int64 {
+	if value, ok := b.value.resolve(0); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is non-NULL and
+// fits in an int.
+func (b safeIntBuilder) AppendValid(dst []int) []int {
+	if value, ok := b.resolved(); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is non-NULL.
+func (b float8Builder) AppendValid(dst []float64) []float64 {
+	if value, ok := b.value.resolve(0); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is a finite date.
+func (b dateBuilder) AppendValid(dst []time.Time) []time.Time {
+	if value, ok := b.value.resolve(time.Time{}); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is a finite timestamp.
+func (b timestampBuilder) AppendValid(dst []time.Time) []time.Time {
+	if value, ok := b.value.resolve(time.Time{}); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is a finite timestamptz.
+func (b timestamptzBuilder) AppendValid(dst []time.Time) []time.Time {
+	if value, ok := b.value.resolve(time.Time{}); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
+// AppendValid appends the decoded value to dst when the source is non-NULL.
+func (b uuidBuilder) AppendValid(dst []uuid.UUID) []uuid.UUID {
+	if value, ok := b.value.resolve(uuid.Nil); ok {
+		return append(dst, value)
+	}
+	return dst
+}
+
 func Text(value pgtype.Text) textBuilder {
 	return textBuilder{value: newNullableValue(value.Valid, value.String)}
 }
