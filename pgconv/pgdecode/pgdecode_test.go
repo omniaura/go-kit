@@ -307,3 +307,50 @@ func TestNumeric(t *testing.T) {
 		t.Fatalf("Numeric.Int64().Fallback().Fill() changed value to %d", intSeed)
 	}
 }
+
+func TestAppendValid(t *testing.T) {
+	// Text: valid appends, NULL skips, Fallback counts as present.
+	var ids []string
+	ids = pgdecode.Text(pgtype.Text{String: "a", Valid: true}).AppendValid(ids)
+	ids = pgdecode.Text(pgtype.Text{}).AppendValid(ids) // NULL -> skipped
+	ids = pgdecode.Text(pgtype.Text{String: "", Valid: true}).AppendValid(ids)
+	ids = pgdecode.Text(pgtype.Text{}).Fallback("fb").AppendValid(ids)
+	if want := []string{"a", "", "fb"}; !equalStrings(ids, want) {
+		t.Fatalf("Text.AppendValid() = %#v, want %#v", ids, want)
+	}
+
+	// Int8: valid appends, NULL skips.
+	var nums []int64
+	nums = pgdecode.Int8(pgtype.Int8{Int64: 7, Valid: true}).AppendValid(nums)
+	nums = pgdecode.Int8(pgtype.Int8{}).AppendValid(nums)
+	nums = pgdecode.Int8(pgtype.Int8{Int64: 9, Valid: true}).AppendValid(nums)
+	if want := []int64{7, 9}; len(nums) != len(want) || nums[0] != 7 || nums[1] != 9 {
+		t.Fatalf("Int8.AppendValid() = %#v, want %#v", nums, want)
+	}
+
+	// UUID: valid appends, NULL skips.
+	u := uuid.New()
+	var uuids []uuid.UUID
+	uuids = pgdecode.UUID(pgtype.UUID{Bytes: u, Valid: true}).AppendValid(uuids)
+	uuids = pgdecode.UUID(pgtype.UUID{}).AppendValid(uuids)
+	if len(uuids) != 1 || uuids[0] != u {
+		t.Fatalf("UUID.AppendValid() = %#v, want [%v]", uuids, u)
+	}
+
+	// nil destination stays nil when nothing is valid.
+	if got := pgdecode.Text(pgtype.Text{}).AppendValid(nil); got != nil {
+		t.Fatalf("Text(NULL).AppendValid(nil) = %#v, want nil", got)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
