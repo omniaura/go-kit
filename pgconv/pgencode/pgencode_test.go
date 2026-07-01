@@ -29,6 +29,99 @@ func TestString(t *testing.T) {
 	}
 }
 
+func TestStringTrimSpace(t *testing.T) {
+	if got := pgencode.String("  hi  ").TrimSpace().Text(); !got.Valid || got.String != "hi" {
+		t.Fatalf("String(pad).TrimSpace().Text() = %#v", got)
+	}
+	// Composes with EmptyIsNull in either order; all-whitespace -> NULL.
+	if got := pgencode.String("   ").TrimSpace().EmptyIsNull().Text(); got.Valid {
+		t.Fatalf("String(ws).TrimSpace().EmptyIsNull().Text() = %#v", got)
+	}
+	if got := pgencode.String("   ").EmptyIsNull().TrimSpace().Text(); got.Valid {
+		t.Fatalf("String(ws).EmptyIsNull().TrimSpace().Text() = %#v", got)
+	}
+	// Trimmed-but-non-empty stays valid and carries the trimmed value.
+	if got := pgencode.String("\t x \n").TrimSpace().EmptyIsNull().Text(); !got.Valid || got.String != "x" {
+		t.Fatalf("String(pad).TrimSpace().EmptyIsNull().Text() = %#v", got)
+	}
+	// Without EmptyIsNull, an all-whitespace input trims to a valid empty string.
+	if got := pgencode.String("   ").TrimSpace().Text(); !got.Valid || got.String != "" {
+		t.Fatalf("String(ws).TrimSpace().Text() = %#v", got)
+	}
+	// StringPtr(nil) stays NULL regardless of TrimSpace.
+	if got := pgencode.StringPtr((*string)(nil)).TrimSpace().EmptyIsNull().Text(); got.Valid {
+		t.Fatalf("StringPtr(nil).TrimSpace().EmptyIsNull().Text() = %#v", got)
+	}
+}
+
+func TestIntegersNonPositiveIsNull(t *testing.T) {
+	// Positive values stay valid at every output width.
+	if got := pgencode.Int64(5).NonPositiveIsNull().Int8(); !got.Valid || got.Int64 != 5 {
+		t.Fatalf("Int64(5).NonPositiveIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int64(5).NonPositiveIsNull().Int4(); !got.Valid || got.Int32 != 5 {
+		t.Fatalf("Int64(5).NonPositiveIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int64(5).NonPositiveIsNull().Int2(); !got.Valid || got.Int16 != 5 {
+		t.Fatalf("Int64(5).NonPositiveIsNull().Int2() = %#v", got)
+	}
+
+	// Zero is NULL at every output width.
+	if got := pgencode.Int64(0).NonPositiveIsNull().Int8(); got.Valid {
+		t.Fatalf("Int64(0).NonPositiveIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int64(0).NonPositiveIsNull().Int4(); got.Valid {
+		t.Fatalf("Int64(0).NonPositiveIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int64(0).NonPositiveIsNull().Int2(); got.Valid {
+		t.Fatalf("Int64(0).NonPositiveIsNull().Int2() = %#v", got)
+	}
+
+	// Negative values are NULL too (this is the difference from ZeroIsNull).
+	if got := pgencode.Int64(-3).NonPositiveIsNull().Int8(); got.Valid {
+		t.Fatalf("Int64(-3).NonPositiveIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int64(-3).ZeroIsNull().Int8(); !got.Valid || got.Int64 != -3 {
+		t.Fatalf("Int64(-3).ZeroIsNull().Int8() = %#v (negatives stay valid under ZeroIsNull)", got)
+	}
+
+	// Every integer constructor exposes NonPositiveIsNull with the same semantics.
+	if got := pgencode.Int8(-1).NonPositiveIsNull().Int8(); got.Valid {
+		t.Fatalf("Int8(-1).NonPositiveIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int8(2).NonPositiveIsNull().Int8(); !got.Valid || got.Int64 != 2 {
+		t.Fatalf("Int8(2).NonPositiveIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int16(0).NonPositiveIsNull().Int4(); got.Valid {
+		t.Fatalf("Int16(0).NonPositiveIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int32(-5).NonPositiveIsNull().Int4(); got.Valid {
+		t.Fatalf("Int32(-5).NonPositiveIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int(4).NonPositiveIsNull().Int8(); !got.Valid || got.Int64 != 4 {
+		t.Fatalf("Int(4).NonPositiveIsNull().Int8() = %#v", got)
+	}
+
+	// Composes with the checked (Try*) outputs.
+	if got, err := pgencode.Int64(-2).NonPositiveIsNull().TryInt4(); err != nil || got.Valid {
+		t.Fatalf("Int64(-2).NonPositiveIsNull().TryInt4() = %#v, err=%v", got, err)
+	}
+	if got, err := pgencode.Int64(7).NonPositiveIsNull().TryInt2(); err != nil || !got.Valid || got.Int16 != 7 {
+		t.Fatalf("Int64(7).NonPositiveIsNull().TryInt2() = %#v, err=%v", got, err)
+	}
+
+	// Float variant mirrors the integer semantics.
+	if got := pgencode.Float64(-1.5).NonPositiveIsNull().Float8(); got.Valid {
+		t.Fatalf("Float64(-1.5).NonPositiveIsNull().Float8() = %#v", got)
+	}
+	if got := pgencode.Float64(0).NonPositiveIsNull().Float8(); got.Valid {
+		t.Fatalf("Float64(0).NonPositiveIsNull().Float8() = %#v", got)
+	}
+	if got := pgencode.Float64(2.5).NonPositiveIsNull().Float8(); !got.Valid || got.Float64 != 2.5 {
+		t.Fatalf("Float64(2.5).NonPositiveIsNull().Float8() = %#v", got)
+	}
+}
+
 func TestBool(t *testing.T) {
 	if got := pgencode.Bool(true).Bool(); !got.Valid || !got.Bool {
 		t.Fatalf("Bool().Bool() = %#v", got)

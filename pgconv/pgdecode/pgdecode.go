@@ -658,6 +658,23 @@ func Text(value pgtype.Text) textBuilder {
 	return textBuilder{value: newNullableValue(value.Valid, value.String)}
 }
 
+// CoalesceText returns a textBuilder over the first argument that decodes to a
+// non-empty string. "Non-empty" is stronger than Valid: a value that is Valid
+// but whose String is "" is skipped. If every argument decodes to "", the
+// builder resolves as valid over that empty string, so .Value() returns "" and
+// .Ptr()/.Fill() still yield the empty value (they do not report NULL). Pass the
+// most-preferred value first, e.g.
+// pgdecode.CoalesceText(description, title).Value() prefers a non-empty
+// description and otherwise falls back to title.
+func CoalesceText(values ...pgtype.Text) textBuilder {
+	for _, value := range values {
+		if value.Valid && value.String != "" {
+			return textBuilder{value: newNullableValue(true, value.String)}
+		}
+	}
+	return textBuilder{value: newNullableValue(true, "")}
+}
+
 func Bool(value pgtype.Bool) boolBuilder {
 	return boolBuilder{value: newNullableValue(value.Valid, value.Bool)}
 }

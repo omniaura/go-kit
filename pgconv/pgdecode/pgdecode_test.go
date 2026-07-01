@@ -48,6 +48,55 @@ func TestText(t *testing.T) {
 	}
 }
 
+func TestCoalesceText(t *testing.T) {
+	title := pgtype.Text{String: "title", Valid: true}
+	description := pgtype.Text{String: "description", Valid: true}
+	emptyValid := pgtype.Text{String: "", Valid: true}
+	null := pgtype.Text{}
+
+	// First non-empty wins: a non-empty description is preferred over title.
+	if got := pgdecode.CoalesceText(description, title).Value(); got != "description" {
+		t.Fatalf("CoalesceText(description, title).Value() = %q", got)
+	}
+	// Empty (even if Valid) is skipped, falling through to the next non-empty.
+	if got := pgdecode.CoalesceText(emptyValid, title).Value(); got != "title" {
+		t.Fatalf("CoalesceText(emptyValid, title).Value() = %q", got)
+	}
+	// NULL is skipped too.
+	if got := pgdecode.CoalesceText(null, title).Value(); got != "title" {
+		t.Fatalf("CoalesceText(null, title).Value() = %q", got)
+	}
+
+	// All-empty resolves to "" and remains non-NULL (Ptr/Fill still yield "").
+	allEmpty := pgdecode.CoalesceText(null, emptyValid)
+	if got := allEmpty.Value(); got != "" {
+		t.Fatalf("CoalesceText(all empty).Value() = %q", got)
+	}
+	if ptr := allEmpty.Ptr(); ptr == nil || *ptr != "" {
+		t.Fatalf("CoalesceText(all empty).Ptr() = %#v", ptr)
+	}
+	filled := "seed"
+	allEmpty.Fill(&filled)
+	if filled != "" {
+		t.Fatalf("CoalesceText(all empty).Fill() = %q", filled)
+	}
+
+	// No args behaves like all-empty.
+	if got := pgdecode.CoalesceText().Value(); got != "" {
+		t.Fatalf("CoalesceText().Value() = %q", got)
+	}
+
+	// Ptr/Fill on a match.
+	if ptr := pgdecode.CoalesceText(description, title).Ptr(); ptr == nil || *ptr != "description" {
+		t.Fatalf("CoalesceText(description, title).Ptr() = %#v", ptr)
+	}
+	dst := "seed"
+	pgdecode.CoalesceText(null, title).Fill(&dst)
+	if dst != "title" {
+		t.Fatalf("CoalesceText(null, title).Fill() = %q", dst)
+	}
+}
+
 func TestBoolAndIntegers(t *testing.T) {
 	if got := pgdecode.Bool(pgtype.Bool{Bool: true, Valid: true}).Value(); !got {
 		t.Fatalf("Bool.Value() = %v", got)

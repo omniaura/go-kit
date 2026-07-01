@@ -48,7 +48,8 @@ type pgtypeRule struct {
 	// zeroIsNull is true when the encode builder exposes a ZeroIsNull() method,
 	// i.e. a `Valid: v != 0` composite literal can be rewritten as
 	// pgencode.Fn(v).ZeroIsNull().Method(). Applies to the integer and float
-	// builders.
+	// builders. The same builders also expose NonPositiveIsNull() for a
+	// `Valid: v > 0` composite literal (NULL when v <= 0).
 	zeroIsNull bool
 }
 
@@ -511,12 +512,21 @@ func encodeSuggestion(pass *analysis.Pass, rule pgtypeRule, value, valid ast.Exp
 		return fmt.Sprintf("pgencode.%sPtr(...).%s()", rule.encodeFunc, rule.encodeMethod)
 	}
 
-	if rule.encodeFunc == "String" && isNonEmptyStringCheck(valid, value, pass.Fset) {
-		return fmt.Sprintf("pgencode.%s(...).EmptyIsNull().%s()", rule.encodeFunc, rule.encodeMethod)
+	if rule.encodeFunc == "String" {
+		if _, ok := trimSpaceArg(value); ok && isNonEmptyStringCheck(valid, value, pass.Fset) {
+			return fmt.Sprintf("pgencode.%s(...).TrimSpace().EmptyIsNull().%s()", rule.encodeFunc, rule.encodeMethod)
+		}
+		if isNonEmptyStringCheck(valid, value, pass.Fset) {
+			return fmt.Sprintf("pgencode.%s(...).EmptyIsNull().%s()", rule.encodeFunc, rule.encodeMethod)
+		}
 	}
 
 	if rule.zeroIsNull && isNonZeroCheck(valid, value, pass.Fset) {
 		return fmt.Sprintf("pgencode.%s(...).ZeroIsNull().%s()", rule.encodeFunc, rule.encodeMethod)
+	}
+
+	if rule.zeroIsNull && isPositiveCheck(valid, value, pass.Fset) {
+		return fmt.Sprintf("pgencode.%s(...).NonPositiveIsNull().%s()", rule.encodeFunc, rule.encodeMethod)
 	}
 
 	return fmt.Sprintf("pgencode.%s(...).%s()", rule.encodeFunc, rule.encodeMethod)
@@ -538,15 +548,21 @@ func (r reporter) encodeReplacement(rule pgtypeRule, typeName, valueField string
 	arg := renderNode(r.pass.Fset, value)
 	chain := ""
 	ptr := dereferencedExpr(value)
+	trimmed, isTrim := trimSpaceArg(value)
 	switch {
 	case isTrue(valid):
 	case ptr != nil && isNotNilCheck(valid, ptr, r.pass.Fset):
 		fn += "Ptr"
 		arg = renderNode(r.pass.Fset, ptr)
+	case rule.encodeFunc == "String" && isTrim && isNonEmptyStringCheck(valid, value, r.pass.Fset):
+		arg = renderNode(r.pass.Fset, trimmed)
+		chain = ".TrimSpace().EmptyIsNull()"
 	case rule.encodeFunc == "String" && isNonEmptyStringCheck(valid, value, r.pass.Fset):
 		chain = ".EmptyIsNull()"
 	case rule.zeroIsNull && isNonZeroCheck(valid, value, r.pass.Fset):
 		chain = ".ZeroIsNull()"
+	case rule.zeroIsNull && isPositiveCheck(valid, value, r.pass.Fset):
+		chain = ".NonPositiveIsNull()"
 	default:
 		return encodeReplacement{}, false
 	}
@@ -912,6 +928,24 @@ func dereferencedExpr(expr ast.Expr) ast.Expr {
 	return star.X
 }
 
+// trimSpaceArg returns the single argument x when expr is a `strings.TrimSpace(x)`
+// call, so the constructor can be built over x with a .TrimSpace() step.
+func trimSpaceArg(expr ast.Expr) (ast.Expr, bool) {
+	call, ok := unparen(expr).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return nil, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "TrimSpace" {
+		return nil, false
+	}
+	pkg, ok := unparen(sel.X).(*ast.Ident)
+	if !ok || pkg.Name != "strings" {
+		return nil, false
+	}
+	return call.Args[0], true
+}
+
 func isNonEmptyStringCheck(expr, value ast.Expr, fset *token.FileSet) bool {
 	bin, ok := unparen(expr).(*ast.BinaryExpr)
 	if !ok || bin.Op != token.NEQ {
@@ -928,6 +962,23 @@ func isNonZeroCheck(expr, value ast.Expr, fset *token.FileSet) bool {
 	}
 	return (sameExpr(bin.X, value, fset) && isZeroLiteral(bin.Y)) ||
 		(sameExpr(bin.Y, value, fset) && isZeroLiteral(bin.X))
+}
+
+// isPositiveCheck reports whether expr is a `value > 0` / `0 < value` comparison,
+// i.e. the composite literal is NULL when value <= 0 (maps to NonPositiveIsNull()).
+func isPositiveCheck(expr, value ast.Expr, fset *token.FileSet) bool {
+	bin, ok := unparen(expr).(*ast.BinaryExpr)
+	if !ok {
+		return false
+	}
+	switch bin.Op {
+	case token.GTR: // value > 0
+		return sameExpr(bin.X, value, fset) && isZeroLiteral(bin.Y)
+	case token.LSS: // 0 < value
+		return sameExpr(bin.Y, value, fset) && isZeroLiteral(bin.X)
+	default:
+		return false
+	}
 }
 
 func isZeroLiteral(expr ast.Expr) bool {

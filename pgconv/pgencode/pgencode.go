@@ -3,6 +3,7 @@ package pgencode
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,6 +70,7 @@ func int4TruncatedValue(value int64, present bool) pgtype.Int4 {
 type stringBuilder struct {
 	input       inputValue[string]
 	emptyIsNull bool
+	trimSpace   bool
 }
 
 func (b stringBuilder) EmptyIsNull() stringBuilder {
@@ -76,14 +78,31 @@ func (b stringBuilder) EmptyIsNull() stringBuilder {
 	return b
 }
 
+// TrimSpace trims leading and trailing whitespace (via strings.TrimSpace) from
+// the input before the value and validity are computed. It composes with
+// EmptyIsNull() in either order, so pgencode.String(v).TrimSpace().EmptyIsNull().Text()
+// yields a NULL pgtype.Text when v is empty or all-whitespace.
+func (b stringBuilder) TrimSpace() stringBuilder {
+	b.trimSpace = true
+	return b
+}
+
+func (b stringBuilder) resolved() string {
+	if b.trimSpace {
+		return strings.TrimSpace(b.input.value)
+	}
+	return b.input.value
+}
+
 func (b stringBuilder) Text() pgtype.Text {
 	if !b.input.present {
 		return pgtype.Text{}
 	}
-	if b.emptyIsNull && b.input.value == "" {
+	value := b.resolved()
+	if b.emptyIsNull && value == "" {
 		return pgtype.Text{}
 	}
-	return pgtype.Text{String: b.input.value, Valid: true}
+	return pgtype.Text{String: value, Valid: true}
 }
 
 type boolBuilder struct {
@@ -97,32 +116,54 @@ func (b boolBuilder) Bool() pgtype.Bool {
 	return pgtype.Bool{Bool: b.input.value, Valid: true}
 }
 
+// intNullMode records the optional NULL-selection modifier requested on an
+// integer builder. Zero value (intNullNone) means "only a nil pointer is NULL".
+type intNullMode uint8
+
+const (
+	intNullNone        intNullMode = iota // no modifier
+	intNullZero                           // ZeroIsNull(): NULL when value == 0
+	intNullNonPositive                    // NonPositiveIsNull(): NULL when value <= 0
+)
+
 // intPresent reports whether an integer builder should produce a valid
 // (non-NULL) value. It is false when the input is absent (e.g. a nil pointer)
-// or when ZeroIsNull() was requested and the value is zero.
-func intPresent(value int64, present, zeroIsNull bool) bool {
+// or when the requested nullMode selects the value as NULL: ZeroIsNull when the
+// value is zero, NonPositiveIsNull when the value is <= 0.
+func intPresent(value int64, present bool, nullMode intNullMode) bool {
 	if !present {
 		return false
 	}
-	if zeroIsNull && value == 0 {
-		return false
+	switch nullMode {
+	case intNullZero:
+		return value != 0
+	case intNullNonPositive:
+		return value > 0
+	default:
+		return true
 	}
-	return true
 }
 
 type int8Builder struct {
-	input      inputValue[int8]
-	zeroIsNull bool
+	input    inputValue[int8]
+	nullMode intNullMode
 }
 
 // ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
 func (b int8Builder) ZeroIsNull() int8Builder {
-	b.zeroIsNull = true
+	b.nullMode = intNullZero
+	return b
+}
+
+// NonPositiveIsNull makes the resulting pgtype value NULL when the input integer
+// is <= 0 (zero or negative).
+func (b int8Builder) NonPositiveIsNull() int8Builder {
+	b.nullMode = intNullNonPositive
 	return b
 }
 
 func (b int8Builder) present() bool {
-	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
+	return intPresent(int64(b.input.value), b.input.present, b.nullMode)
 }
 
 func (b int8Builder) Int2() pgtype.Int2 {
@@ -138,18 +179,25 @@ func (b int8Builder) Int8() pgtype.Int8 {
 }
 
 type int16Builder struct {
-	input      inputValue[int16]
-	zeroIsNull bool
+	input    inputValue[int16]
+	nullMode intNullMode
 }
 
 // ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
 func (b int16Builder) ZeroIsNull() int16Builder {
-	b.zeroIsNull = true
+	b.nullMode = intNullZero
+	return b
+}
+
+// NonPositiveIsNull makes the resulting pgtype value NULL when the input integer
+// is <= 0 (zero or negative).
+func (b int16Builder) NonPositiveIsNull() int16Builder {
+	b.nullMode = intNullNonPositive
 	return b
 }
 
 func (b int16Builder) present() bool {
-	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
+	return intPresent(int64(b.input.value), b.input.present, b.nullMode)
 }
 
 func (b int16Builder) Int2() pgtype.Int2 {
@@ -165,18 +213,25 @@ func (b int16Builder) Int8() pgtype.Int8 {
 }
 
 type int32Builder struct {
-	input      inputValue[int32]
-	zeroIsNull bool
+	input    inputValue[int32]
+	nullMode intNullMode
 }
 
 // ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
 func (b int32Builder) ZeroIsNull() int32Builder {
-	b.zeroIsNull = true
+	b.nullMode = intNullZero
+	return b
+}
+
+// NonPositiveIsNull makes the resulting pgtype value NULL when the input integer
+// is <= 0 (zero or negative).
+func (b int32Builder) NonPositiveIsNull() int32Builder {
+	b.nullMode = intNullNonPositive
 	return b
 }
 
 func (b int32Builder) present() bool {
-	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
+	return intPresent(int64(b.input.value), b.input.present, b.nullMode)
 }
 
 func (b int32Builder) Int2() pgtype.Int2 {
@@ -196,18 +251,25 @@ func (b int32Builder) Int8() pgtype.Int8 {
 }
 
 type int64Builder struct {
-	input      inputValue[int64]
-	zeroIsNull bool
+	input    inputValue[int64]
+	nullMode intNullMode
 }
 
 // ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
 func (b int64Builder) ZeroIsNull() int64Builder {
-	b.zeroIsNull = true
+	b.nullMode = intNullZero
+	return b
+}
+
+// NonPositiveIsNull makes the resulting pgtype value NULL when the input integer
+// is <= 0 (zero or negative).
+func (b int64Builder) NonPositiveIsNull() int64Builder {
+	b.nullMode = intNullNonPositive
 	return b
 }
 
 func (b int64Builder) present() bool {
-	return intPresent(b.input.value, b.input.present, b.zeroIsNull)
+	return intPresent(b.input.value, b.input.present, b.nullMode)
 }
 
 func (b int64Builder) Int2() pgtype.Int2 {
@@ -231,18 +293,25 @@ func (b int64Builder) Int8() pgtype.Int8 {
 }
 
 type intBuilder struct {
-	input      inputValue[int]
-	zeroIsNull bool
+	input    inputValue[int]
+	nullMode intNullMode
 }
 
 // ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
 func (b intBuilder) ZeroIsNull() intBuilder {
-	b.zeroIsNull = true
+	b.nullMode = intNullZero
+	return b
+}
+
+// NonPositiveIsNull makes the resulting pgtype value NULL when the input integer
+// is <= 0 (zero or negative).
+func (b intBuilder) NonPositiveIsNull() intBuilder {
+	b.nullMode = intNullNonPositive
 	return b
 }
 
 func (b intBuilder) present() bool {
-	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
+	return intPresent(int64(b.input.value), b.input.present, b.nullMode)
 }
 
 func (b intBuilder) Int2() pgtype.Int2 {
@@ -266,21 +335,39 @@ func (b intBuilder) Int8() pgtype.Int8 {
 }
 
 type float64Builder struct {
-	input      inputValue[float64]
-	zeroIsNull bool
+	input    inputValue[float64]
+	nullMode intNullMode
 }
 
 // ZeroIsNull makes the resulting pgtype value NULL when the input float is 0.
 func (b float64Builder) ZeroIsNull() float64Builder {
-	b.zeroIsNull = true
+	b.nullMode = intNullZero
 	return b
 }
 
-func (b float64Builder) Float8() pgtype.Float8 {
+// NonPositiveIsNull makes the resulting pgtype value NULL when the input float
+// is <= 0 (zero or negative).
+func (b float64Builder) NonPositiveIsNull() float64Builder {
+	b.nullMode = intNullNonPositive
+	return b
+}
+
+func (b float64Builder) valid() bool {
 	if !b.input.present {
-		return pgtype.Float8{}
+		return false
 	}
-	if b.zeroIsNull && b.input.value == 0 {
+	switch b.nullMode {
+	case intNullZero:
+		return b.input.value != 0
+	case intNullNonPositive:
+		return b.input.value > 0
+	default:
+		return true
+	}
+}
+
+func (b float64Builder) Float8() pgtype.Float8 {
+	if !b.valid() {
 		return pgtype.Float8{}
 	}
 	return pgtype.Float8{Float64: b.input.value, Valid: true}

@@ -25,6 +25,10 @@ func (b textBuilder) EmptyIsNull() textBuilder {
 	return b
 }
 
+func (b textBuilder) TrimSpace() textBuilder {
+	return b
+}
+
 func (b textBuilder) Text() pgtype.Text {
 	return pgtype.Text{String: b.value, Valid: true}
 }
@@ -50,6 +54,10 @@ func Int64(value int64) int64Builder {
 }
 
 func (b int64Builder) ZeroIsNull() int64Builder {
+	return b
+}
+
+func (b int64Builder) NonPositiveIsNull() int64Builder {
 	return b
 }
 
