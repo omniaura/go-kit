@@ -1,0 +1,10 @@
+package imports
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/omniaura/go-kit/pgconv/pgencode"
+)
+
+func encode(s string) pgtype.Text {
+	return pgencode.String(s).Text() // want "manual pgtype.Text encode; use pgencode.String"
+}

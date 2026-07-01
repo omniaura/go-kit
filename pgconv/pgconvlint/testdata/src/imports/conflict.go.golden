@@ -1,0 +1,12 @@
+package imports
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+	pgencode1 "github.com/omniaura/go-kit/pgconv/pgencode"
+)
+
+var pgencode = struct{}{}
+
+func encodeConflict(s string) pgtype.Text {
+	return pgencode1.String(s).Text() // want "manual pgtype.Text encode; use pgencode.String"
+}
