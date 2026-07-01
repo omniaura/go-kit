@@ -80,12 +80,81 @@ func TestIntegers(t *testing.T) {
 	}
 }
 
+func TestIntegersZeroIsNull(t *testing.T) {
+	// Non-zero values stay valid and carry the value through every output width.
+	if got := pgencode.Int64(5).ZeroIsNull().Int8(); !got.Valid || got.Int64 != 5 {
+		t.Fatalf("Int64(5).ZeroIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int64(5).ZeroIsNull().Int4(); !got.Valid || got.Int32 != 5 {
+		t.Fatalf("Int64(5).ZeroIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int64(5).ZeroIsNull().Int2(); !got.Valid || got.Int16 != 5 {
+		t.Fatalf("Int64(5).ZeroIsNull().Int2() = %#v", got)
+	}
+
+	// Zero values become NULL at every output width.
+	if got := pgencode.Int64(0).ZeroIsNull().Int8(); got.Valid {
+		t.Fatalf("Int64(0).ZeroIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int64(0).ZeroIsNull().Int4(); got.Valid {
+		t.Fatalf("Int64(0).ZeroIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int64(0).ZeroIsNull().Int2(); got.Valid {
+		t.Fatalf("Int64(0).ZeroIsNull().Int2() = %#v", got)
+	}
+
+	// Without ZeroIsNull, zero remains a valid value.
+	if got := pgencode.Int64(0).Int8(); !got.Valid || got.Int64 != 0 {
+		t.Fatalf("Int64(0).Int8() = %#v", got)
+	}
+
+	// Every integer constructor exposes ZeroIsNull with the same semantics.
+	if got := pgencode.Int8(0).ZeroIsNull().Int8(); got.Valid {
+		t.Fatalf("Int8(0).ZeroIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int8(3).ZeroIsNull().Int8(); !got.Valid || got.Int64 != 3 {
+		t.Fatalf("Int8(3).ZeroIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int16(0).ZeroIsNull().Int4(); got.Valid {
+		t.Fatalf("Int16(0).ZeroIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int16(4).ZeroIsNull().Int4(); !got.Valid || got.Int32 != 4 {
+		t.Fatalf("Int16(4).ZeroIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int32(0).ZeroIsNull().Int4(); got.Valid {
+		t.Fatalf("Int32(0).ZeroIsNull().Int4() = %#v", got)
+	}
+	if got := pgencode.Int(0).ZeroIsNull().Int8(); got.Valid {
+		t.Fatalf("Int(0).ZeroIsNull().Int8() = %#v", got)
+	}
+	if got := pgencode.Int(6).ZeroIsNull().Int8(); !got.Valid || got.Int64 != 6 {
+		t.Fatalf("Int(6).ZeroIsNull().Int8() = %#v", got)
+	}
+
+	// ZeroIsNull composes with the checked (Try*) outputs: zero -> NULL, no error.
+	if got, err := pgencode.Int32(0).ZeroIsNull().TryInt2(); err != nil || got.Valid {
+		t.Fatalf("Int32(0).ZeroIsNull().TryInt2() = %#v, err=%v", got, err)
+	}
+	if got, err := pgencode.Int64(7).ZeroIsNull().TryInt4(); err != nil || !got.Valid || got.Int32 != 7 {
+		t.Fatalf("Int64(7).ZeroIsNull().TryInt4() = %#v, err=%v", got, err)
+	}
+}
+
 func TestFloat64(t *testing.T) {
 	if got := pgencode.Float64(1.5).Float8(); !got.Valid || got.Float64 != 1.5 {
 		t.Fatalf("Float64().Float8() = %#v", got)
 	}
 	if got := pgencode.Float64Ptr((*float64)(nil)).Float8(); got.Valid {
 		t.Fatalf("Float64Ptr(nil).Float8() = %#v", got)
+	}
+	if got := pgencode.Float64(0).ZeroIsNull().Float8(); got.Valid {
+		t.Fatalf("Float64(0).ZeroIsNull().Float8() = %#v", got)
+	}
+	if got := pgencode.Float64(2.5).ZeroIsNull().Float8(); !got.Valid || got.Float64 != 2.5 {
+		t.Fatalf("Float64(2.5).ZeroIsNull().Float8() = %#v", got)
+	}
+	if got := pgencode.Float64(0).Float8(); !got.Valid || got.Float64 != 0 {
+		t.Fatalf("Float64(0).Float8() = %#v", got)
 	}
 }
 

@@ -45,6 +45,11 @@ type pgtypeRule struct {
 	encodeFunc   string
 	encodeMethod string
 	decodeFunc   string
+	// zeroIsNull is true when the encode builder exposes a ZeroIsNull() method,
+	// i.e. a `Valid: v != 0` composite literal can be rewritten as
+	// pgencode.Fn(v).ZeroIsNull().Method(). Applies to the integer and float
+	// builders.
+	zeroIsNull bool
 }
 
 type pgconvUse struct {
@@ -83,24 +88,28 @@ var pgtypeRules = map[string]pgtypeRule{
 		encodeFunc:   "Int16",
 		encodeMethod: "Int2",
 		decodeFunc:   "Int2",
+		zeroIsNull:   true,
 	},
 	"Int4": {
 		valueFields:  []string{"Int32"},
 		encodeFunc:   "Int32",
 		encodeMethod: "Int4",
 		decodeFunc:   "Int4",
+		zeroIsNull:   true,
 	},
 	"Int8": {
 		valueFields:  []string{"Int64"},
 		encodeFunc:   "Int64",
 		encodeMethod: "Int8",
 		decodeFunc:   "Int8",
+		zeroIsNull:   true,
 	},
 	"Float8": {
 		valueFields:  []string{"Float64"},
 		encodeFunc:   "Float64",
 		encodeMethod: "Float8",
 		decodeFunc:   "Float8",
+		zeroIsNull:   true,
 	},
 	"Date": {
 		valueFields:  []string{"Time"},
@@ -506,6 +515,10 @@ func encodeSuggestion(pass *analysis.Pass, rule pgtypeRule, value, valid ast.Exp
 		return fmt.Sprintf("pgencode.%s(...).EmptyIsNull().%s()", rule.encodeFunc, rule.encodeMethod)
 	}
 
+	if rule.zeroIsNull && isNonZeroCheck(valid, value, pass.Fset) {
+		return fmt.Sprintf("pgencode.%s(...).ZeroIsNull().%s()", rule.encodeFunc, rule.encodeMethod)
+	}
+
 	return fmt.Sprintf("pgencode.%s(...).%s()", rule.encodeFunc, rule.encodeMethod)
 }
 
@@ -532,6 +545,8 @@ func (r reporter) encodeReplacement(rule pgtypeRule, typeName, valueField string
 		arg = renderNode(r.pass.Fset, ptr)
 	case rule.encodeFunc == "String" && isNonEmptyStringCheck(valid, value, r.pass.Fset):
 		chain = ".EmptyIsNull()"
+	case rule.zeroIsNull && isNonZeroCheck(valid, value, r.pass.Fset):
+		chain = ".ZeroIsNull()"
 	default:
 		return encodeReplacement{}, false
 	}
@@ -904,6 +919,28 @@ func isNonEmptyStringCheck(expr, value ast.Expr, fset *token.FileSet) bool {
 	}
 	return (sameExpr(bin.X, value, fset) && isEmptyString(bin.Y)) ||
 		(sameExpr(bin.Y, value, fset) && isEmptyString(bin.X))
+}
+
+func isNonZeroCheck(expr, value ast.Expr, fset *token.FileSet) bool {
+	bin, ok := unparen(expr).(*ast.BinaryExpr)
+	if !ok || bin.Op != token.NEQ {
+		return false
+	}
+	return (sameExpr(bin.X, value, fset) && isZeroLiteral(bin.Y)) ||
+		(sameExpr(bin.Y, value, fset) && isZeroLiteral(bin.X))
+}
+
+func isZeroLiteral(expr ast.Expr) bool {
+	lit, ok := unparen(expr).(*ast.BasicLit)
+	if !ok || (lit.Kind != token.INT && lit.Kind != token.FLOAT) {
+		return false
+	}
+	switch lit.Value {
+	case "0", "0.0", "0.", ".0":
+		return true
+	default:
+		return false
+	}
 }
 
 func isNotNilCheck(expr, value ast.Expr, fset *token.FileSet) bool {

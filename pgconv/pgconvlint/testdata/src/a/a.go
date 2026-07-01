@@ -8,15 +8,19 @@ import (
 	"github.com/omniaura/go-kit/pgconv/pgencode"
 )
 
-func encode(s string, p *string, b bool, n int64, tm time.Time, id [16]byte) {
-	_ = pgtype.Text{String: s, Valid: true}       // want "manual pgtype.Text encode; use pgencode.String"
-	_ = pgtype.Text{String: s, Valid: s != ""}    // want "manual pgtype.Text encode; use pgencode.String\\(\\.\\.\\.\\).EmptyIsNull\\(\\).Text\\(\\)"
-	_ = pgtype.Text{String: *p, Valid: p != nil}  // want "manual pgtype.Text encode; use pgencode.StringPtr"
-	_ = pgtype.Bool{Bool: b, Valid: true}         // want "manual pgtype.Bool encode; use pgencode.Bool"
-	_ = pgtype.Int8{Int64: n, Valid: true}        // want "manual pgtype.Int8 encode; use pgencode.Int64"
-	_ = pgtype.Timestamptz{Time: tm, Valid: true} // want "manual pgtype.Timestamptz encode; use pgencode.Time"
-	_ = pgtype.UUID{Bytes: id, Valid: true}       // want "manual pgtype.UUID encode; use pgencode.UUID"
-	_ = pgtype.Text{String: s}                    // want "manual pgtype.Text encode; use pgencode.String"
+func encode(s string, p *string, b bool, n int64, f float64, tm time.Time, id [16]byte) {
+	_ = pgtype.Text{String: s, Valid: true}        // want "manual pgtype.Text encode; use pgencode.String"
+	_ = pgtype.Text{String: s, Valid: s != ""}     // want "manual pgtype.Text encode; use pgencode.String\\(\\.\\.\\.\\).EmptyIsNull\\(\\).Text\\(\\)"
+	_ = pgtype.Text{String: *p, Valid: p != nil}   // want "manual pgtype.Text encode; use pgencode.StringPtr"
+	_ = pgtype.Bool{Bool: b, Valid: true}          // want "manual pgtype.Bool encode; use pgencode.Bool"
+	_ = pgtype.Int8{Int64: n, Valid: true}         // want "manual pgtype.Int8 encode; use pgencode.Int64"
+	_ = pgtype.Int8{Int64: n, Valid: n != 0}       // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Int8\\(\\)"
+	_ = pgtype.Int8{Int64: n, Valid: 0 != n}       // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Int8\\(\\)"
+	_ = pgtype.Float8{Float64: f, Valid: f != 0}   // want "manual pgtype.Float8 encode; use pgencode.Float64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Float8\\(\\)"
+	_ = pgtype.Float8{Float64: f, Valid: f != 0.0} // want "manual pgtype.Float8 encode; use pgencode.Float64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Float8\\(\\)"
+	_ = pgtype.Timestamptz{Time: tm, Valid: true}  // want "manual pgtype.Timestamptz encode; use pgencode.Time"
+	_ = pgtype.UUID{Bytes: id, Valid: true}        // want "manual pgtype.UUID encode; use pgencode.UUID"
+	_ = pgtype.Text{String: s}                     // want "manual pgtype.Text encode; use pgencode.String"
 	//lint:ignore pgconvlint legacy test fixture
 	_ = pgtype.Text{String: s, Valid: true}
 	_ = pgtype.Text{}             // zero/null literals are allowed

@@ -97,112 +97,190 @@ func (b boolBuilder) Bool() pgtype.Bool {
 	return pgtype.Bool{Bool: b.input.value, Valid: true}
 }
 
+// intPresent reports whether an integer builder should produce a valid
+// (non-NULL) value. It is false when the input is absent (e.g. a nil pointer)
+// or when ZeroIsNull() was requested and the value is zero.
+func intPresent(value int64, present, zeroIsNull bool) bool {
+	if !present {
+		return false
+	}
+	if zeroIsNull && value == 0 {
+		return false
+	}
+	return true
+}
+
 type int8Builder struct {
-	input inputValue[int8]
+	input      inputValue[int8]
+	zeroIsNull bool
+}
+
+// ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
+func (b int8Builder) ZeroIsNull() int8Builder {
+	b.zeroIsNull = true
+	return b
+}
+
+func (b int8Builder) present() bool {
+	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
 }
 
 func (b int8Builder) Int2() pgtype.Int2 {
-	return int2TruncatedValue(int64(b.input.value), b.input.present)
+	return int2TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b int8Builder) Int4() pgtype.Int4 {
-	return int4TruncatedValue(int64(b.input.value), b.input.present)
+	return int4TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b int8Builder) Int8() pgtype.Int8 {
-	return int8Value(int64(b.input.value), b.input.present)
+	return int8Value(int64(b.input.value), b.present())
 }
 
 type int16Builder struct {
-	input inputValue[int16]
+	input      inputValue[int16]
+	zeroIsNull bool
+}
+
+// ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
+func (b int16Builder) ZeroIsNull() int16Builder {
+	b.zeroIsNull = true
+	return b
+}
+
+func (b int16Builder) present() bool {
+	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
 }
 
 func (b int16Builder) Int2() pgtype.Int2 {
-	return int2TruncatedValue(int64(b.input.value), b.input.present)
+	return int2TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b int16Builder) Int4() pgtype.Int4 {
-	return int4TruncatedValue(int64(b.input.value), b.input.present)
+	return int4TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b int16Builder) Int8() pgtype.Int8 {
-	return int8Value(int64(b.input.value), b.input.present)
+	return int8Value(int64(b.input.value), b.present())
 }
 
 type int32Builder struct {
-	input inputValue[int32]
+	input      inputValue[int32]
+	zeroIsNull bool
+}
+
+// ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
+func (b int32Builder) ZeroIsNull() int32Builder {
+	b.zeroIsNull = true
+	return b
+}
+
+func (b int32Builder) present() bool {
+	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
 }
 
 func (b int32Builder) Int2() pgtype.Int2 {
-	return int2TruncatedValue(int64(b.input.value), b.input.present)
+	return int2TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b int32Builder) TryInt2() (pgtype.Int2, error) {
-	return int2Value(int64(b.input.value), b.input.present)
+	return int2Value(int64(b.input.value), b.present())
 }
 
 func (b int32Builder) Int4() pgtype.Int4 {
-	return int4TruncatedValue(int64(b.input.value), b.input.present)
+	return int4TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b int32Builder) Int8() pgtype.Int8 {
-	return int8Value(int64(b.input.value), b.input.present)
+	return int8Value(int64(b.input.value), b.present())
 }
 
 type int64Builder struct {
-	input inputValue[int64]
+	input      inputValue[int64]
+	zeroIsNull bool
+}
+
+// ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
+func (b int64Builder) ZeroIsNull() int64Builder {
+	b.zeroIsNull = true
+	return b
+}
+
+func (b int64Builder) present() bool {
+	return intPresent(b.input.value, b.input.present, b.zeroIsNull)
 }
 
 func (b int64Builder) Int2() pgtype.Int2 {
-	return int2TruncatedValue(b.input.value, b.input.present)
+	return int2TruncatedValue(b.input.value, b.present())
 }
 
 func (b int64Builder) TryInt2() (pgtype.Int2, error) {
-	return int2Value(b.input.value, b.input.present)
+	return int2Value(b.input.value, b.present())
 }
 
 func (b int64Builder) Int4() pgtype.Int4 {
-	return int4TruncatedValue(b.input.value, b.input.present)
+	return int4TruncatedValue(b.input.value, b.present())
 }
 
 func (b int64Builder) TryInt4() (pgtype.Int4, error) {
-	return int4Value(b.input.value, b.input.present)
+	return int4Value(b.input.value, b.present())
 }
 
 func (b int64Builder) Int8() pgtype.Int8 {
-	return int8Value(b.input.value, b.input.present)
+	return int8Value(b.input.value, b.present())
 }
 
 type intBuilder struct {
-	input inputValue[int]
+	input      inputValue[int]
+	zeroIsNull bool
+}
+
+// ZeroIsNull makes the resulting pgtype value NULL when the input integer is 0.
+func (b intBuilder) ZeroIsNull() intBuilder {
+	b.zeroIsNull = true
+	return b
+}
+
+func (b intBuilder) present() bool {
+	return intPresent(int64(b.input.value), b.input.present, b.zeroIsNull)
 }
 
 func (b intBuilder) Int2() pgtype.Int2 {
-	return int2TruncatedValue(int64(b.input.value), b.input.present)
+	return int2TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b intBuilder) TryInt2() (pgtype.Int2, error) {
-	return int2Value(int64(b.input.value), b.input.present)
+	return int2Value(int64(b.input.value), b.present())
 }
 
 func (b intBuilder) Int4() pgtype.Int4 {
-	return int4TruncatedValue(int64(b.input.value), b.input.present)
+	return int4TruncatedValue(int64(b.input.value), b.present())
 }
 
 func (b intBuilder) TryInt4() (pgtype.Int4, error) {
-	return int4Value(int64(b.input.value), b.input.present)
+	return int4Value(int64(b.input.value), b.present())
 }
 
 func (b intBuilder) Int8() pgtype.Int8 {
-	return int8Value(int64(b.input.value), b.input.present)
+	return int8Value(int64(b.input.value), b.present())
 }
 
 type float64Builder struct {
-	input inputValue[float64]
+	input      inputValue[float64]
+	zeroIsNull bool
+}
+
+// ZeroIsNull makes the resulting pgtype value NULL when the input float is 0.
+func (b float64Builder) ZeroIsNull() float64Builder {
+	b.zeroIsNull = true
+	return b
 }
 
 func (b float64Builder) Float8() pgtype.Float8 {
 	if !b.input.present {
+		return pgtype.Float8{}
+	}
+	if b.zeroIsNull && b.input.value == 0 {
 		return pgtype.Float8{}
 	}
 	return pgtype.Float8{Float64: b.input.value, Valid: true}
