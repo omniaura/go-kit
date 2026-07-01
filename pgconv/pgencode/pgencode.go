@@ -71,10 +71,26 @@ type stringBuilder struct {
 	input       inputValue[string]
 	emptyIsNull bool
 	trimSpace   bool
+	fallback    *pgtype.Text
 }
 
 func (b stringBuilder) EmptyIsNull() stringBuilder {
 	b.emptyIsNull = true
+	return b
+}
+
+// Fallback substitutes the given pgtype.Text whenever Text() would otherwise
+// produce NULL (the input is absent, or it is empty and EmptyIsNull() was set).
+// It expresses "prefer this string, otherwise keep an existing column value"
+// in a single expression, e.g.
+//
+//	params.CancellationFeedback = pgencode.String(stripeVal).EmptyIsNull().Fallback(row.CancellationFeedback).Text()
+//
+// preserves row.CancellationFeedback exactly (its Valid flag and String)
+// when stripeVal is empty, and overwrites it otherwise. The fallback is
+// returned verbatim, so a NULL fallback stays NULL.
+func (b stringBuilder) Fallback(value pgtype.Text) stringBuilder {
+	b.fallback = &value
 	return b
 }
 
@@ -95,14 +111,14 @@ func (b stringBuilder) resolved() string {
 }
 
 func (b stringBuilder) Text() pgtype.Text {
-	if !b.input.present {
-		return pgtype.Text{}
-	}
 	value := b.resolved()
-	if b.emptyIsNull && value == "" {
-		return pgtype.Text{}
+	if b.input.present && !(b.emptyIsNull && value == "") {
+		return pgtype.Text{String: value, Valid: true}
 	}
-	return pgtype.Text{String: value, Valid: true}
+	if b.fallback != nil {
+		return *b.fallback
+	}
+	return pgtype.Text{}
 }
 
 type boolBuilder struct {
