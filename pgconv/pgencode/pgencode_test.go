@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/omniaura/go-kit/pgconv/pgencode"
 )
 
@@ -282,5 +283,40 @@ func TestUUID(t *testing.T) {
 	}
 	if got := pgencode.UUIDPtr((*uuid.UUID)(nil)).UUID(); got.Valid {
 		t.Fatalf("UUIDPtr(nil).UUID() = %#v", got)
+	}
+}
+
+func TestStringFallback(t *testing.T) {
+	existing := pgtype.Text{String: "kept", Valid: true}
+
+	// Non-empty input wins; the fallback is ignored.
+	if got := pgencode.String("new").EmptyIsNull().Fallback(existing).Text(); !got.Valid || got.String != "new" {
+		t.Fatalf("String(new).Fallback().Text() = %#v, want valid \"new\"", got)
+	}
+
+	// Empty input with EmptyIsNull returns the fallback verbatim (Valid + String).
+	if got := pgencode.String("").EmptyIsNull().Fallback(existing).Text(); got != existing {
+		t.Fatalf("String(empty).EmptyIsNull().Fallback(existing).Text() = %#v, want %#v", got, existing)
+	}
+
+	// A NULL fallback stays NULL.
+	if got := pgencode.String("").EmptyIsNull().Fallback(pgtype.Text{}).Text(); got.Valid {
+		t.Fatalf("String(empty).Fallback(NULL).Text() = %#v, want NULL", got)
+	}
+
+	// A valid-but-empty fallback is preserved exactly (not collapsed to NULL).
+	emptyValid := pgtype.Text{String: "", Valid: true}
+	if got := pgencode.String("").EmptyIsNull().Fallback(emptyValid).Text(); got != emptyValid {
+		t.Fatalf("Fallback(validEmpty).Text() = %#v, want %#v", got, emptyValid)
+	}
+
+	// Without EmptyIsNull an empty input is itself valid, so the fallback is unused.
+	if got := pgencode.String("").Fallback(existing).Text(); !got.Valid || got.String != "" {
+		t.Fatalf("String(empty).Fallback().Text() = %#v, want valid \"\"", got)
+	}
+
+	// A nil-pointer input (absent) also falls back.
+	if got := pgencode.StringPtr(nil).Fallback(existing).Text(); got != existing {
+		t.Fatalf("StringPtr(nil).Fallback(existing).Text() = %#v, want %#v", got, existing)
 	}
 }
