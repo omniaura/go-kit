@@ -9,18 +9,21 @@ import (
 )
 
 func encode(s string, p *string, b bool, n int64, f float64, tm time.Time, id [16]byte) {
-	_ = pgencode.String(s).Text()                        // want "manual pgtype.Text encode; use pgencode.String"
-	_ = pgencode.String(s).EmptyIsNull().Text()          // want "manual pgtype.Text encode; use pgencode.String\\(\\.\\.\\.\\).EmptyIsNull\\(\\).Text\\(\\)"
-	_ = pgencode.StringPtr(p).Text()                     // want "manual pgtype.Text encode; use pgencode.StringPtr"
-	_ = pgencode.Bool(b).Bool()                          // want "manual pgtype.Bool encode; use pgencode.Bool"
-	_ = pgencode.Int64(n).Int8()                         // want "manual pgtype.Int8 encode; use pgencode.Int64"
-	_ = pgencode.Int64(n).ZeroIsNull().Int8()            // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Int8\\(\\)"
-	_ = pgencode.Int64(n).ZeroIsNull().Int8()            // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Int8\\(\\)"
-	_ = pgencode.Float64(f).ZeroIsNull().Float8()        // want "manual pgtype.Float8 encode; use pgencode.Float64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Float8\\(\\)"
-	_ = pgencode.Float64(f).ZeroIsNull().Float8()        // want "manual pgtype.Float8 encode; use pgencode.Float64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Float8\\(\\)"
-	_ = pgencode.Time(tm).Timestamptz()                  // want "manual pgtype.Timestamptz encode; use pgencode.Time"
-	_ = pgencode.UUID(id).UUID()                         // want "manual pgtype.UUID encode; use pgencode.UUID"
-	_ = pgtype.Text{String: s}                           // want "manual pgtype.Text encode; use pgencode.String"
+	_ = pgencode.String(s).Text()                           // want "manual pgtype.Text encode; use pgencode.String"
+	_ = pgencode.String(s).EmptyIsNull().Text()             // want "manual pgtype.Text encode; use pgencode.String\\(\\.\\.\\.\\).EmptyIsNull\\(\\).Text\\(\\)"
+	_ = pgencode.StringPtr(p).Text()                        // want "manual pgtype.Text encode; use pgencode.StringPtr"
+	_ = pgencode.String(s).TrimSpace().EmptyIsNull().Text() // want "manual pgtype.Text encode; use pgencode.String\\(\\.\\.\\.\\).TrimSpace\\(\\).EmptyIsNull\\(\\).Text\\(\\)"
+	_ = pgencode.Bool(b).Bool()                             // want "manual pgtype.Bool encode; use pgencode.Bool"
+	_ = pgencode.Int64(n).Int8()                            // want "manual pgtype.Int8 encode; use pgencode.Int64"
+	_ = pgencode.Int64(n).ZeroIsNull().Int8()               // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Int8\\(\\)"
+	_ = pgencode.Int64(n).ZeroIsNull().Int8()               // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Int8\\(\\)"
+	_ = pgencode.Int64(n).NonPositiveIsNull().Int8()        // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).NonPositiveIsNull\\(\\).Int8\\(\\)"
+	_ = pgencode.Int64(n).NonPositiveIsNull().Int8()        // want "manual pgtype.Int8 encode; use pgencode.Int64\\(\\.\\.\\.\\).NonPositiveIsNull\\(\\).Int8\\(\\)"
+	_ = pgencode.Float64(f).ZeroIsNull().Float8()           // want "manual pgtype.Float8 encode; use pgencode.Float64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Float8\\(\\)"
+	_ = pgencode.Float64(f).ZeroIsNull().Float8()           // want "manual pgtype.Float8 encode; use pgencode.Float64\\(\\.\\.\\.\\).ZeroIsNull\\(\\).Float8\\(\\)"
+	_ = pgencode.Time(tm).Timestamptz()                     // want "manual pgtype.Timestamptz encode; use pgencode.Time"
+	_ = pgencode.UUID(id).UUID()                            // want "manual pgtype.UUID encode; use pgencode.UUID"
+	_ = pgtype.Text{String: s}                              // want "manual pgtype.Text encode; use pgencode.String"
 	//lint:ignore pgconvlint legacy test fixture
 	_ = pgtype.Text{String: s, Valid: true}
 	_ = pgtype.Text{}             // zero/null literals are allowed
