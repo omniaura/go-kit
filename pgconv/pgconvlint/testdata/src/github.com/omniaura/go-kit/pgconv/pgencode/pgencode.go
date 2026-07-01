@@ -49,8 +49,28 @@ func Int64(value int64) int64Builder {
 	return int64Builder{value: value}
 }
 
+func (b int64Builder) ZeroIsNull() int64Builder {
+	return b
+}
+
 func (b int64Builder) Int8() pgtype.Int8 {
 	return pgtype.Int8{Int64: b.value, Valid: true}
+}
+
+type float64Builder struct {
+	value float64
+}
+
+func Float64(value float64) float64Builder {
+	return float64Builder{value: value}
+}
+
+func (b float64Builder) ZeroIsNull() float64Builder {
+	return b
+}
+
+func (b float64Builder) Float8() pgtype.Float8 {
+	return pgtype.Float8{Float64: b.value, Valid: true}
 }
 
 type timeBuilder struct {
