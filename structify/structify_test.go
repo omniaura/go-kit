@@ -368,19 +368,19 @@ var _ = F(1, 2, 3, 4, 5)
 			reason: "generic",
 		},
 		{
-			name: "ctx not in leading position",
+			name: "multiple ctx params",
 			src: `package a
 
 import "context"
 
-func F(vm string, ctx context.Context, b, c, d string) string {
-	_ = ctx
-	return vm + b + c + d
+func F(ctx context.Context, b, c, d string, ctx2 context.Context) string {
+	_, _ = ctx, ctx2
+	return b + c + d
 }
 
-var _ = F("v", context.TODO(), "b", "c", "d")
+var _ = F(context.TODO(), "b", "c", "d", context.TODO())
 `,
-			reason: "not in leading position",
+			reason: "multiple context.Context",
 		},
 		{
 			name: "param reused on := left side",
@@ -462,6 +462,100 @@ var _ = G(1, 2, 3, 4, 5)
 	res := plan(t, pkgs)
 	if len(res.Rewritten) != 0 || len(res.Skipped) != 0 {
 		t.Fatalf("suppressed funcs were processed: rewritten=%d skipped=%d", len(res.Rewritten), len(res.Skipped))
+	}
+}
+
+func TestCtxHoistedToFront(t *testing.T) {
+	dir, pkgs := loadModule(t, map[string]string{
+		"a/a.go": `package a
+
+import "context"
+
+// dispatch runs one tool call.
+func dispatch(vm string, ctx context.Context, opts int, name string, argv []byte) string {
+	_ = ctx
+	return vm + name + string(argv) + string(rune(opts))
+}
+
+func kick(ctx context.Context) string {
+	return dispatch("vm", ctx, 7, "n", []byte("x"))
+}
+`,
+		"b/b.go": `package b
+
+import (
+	"context"
+
+	"example.com/m/a"
+)
+
+// ctx argument in the middle AND as the last argument.
+func Use() string {
+	return a.Dispatch2("vm", 7, "n", []byte("x"), context.Background())
+}
+`,
+		"a/a2.go": `package a
+
+import "context"
+
+func Dispatch2(vm string, opts int, name string, argv []byte, ctx context.Context) string {
+	_ = ctx
+	return vm + name
+}
+`,
+	})
+	res := plan(t, pkgs)
+	if len(res.Rewritten) != 2 {
+		t.Fatalf("rewritten=%d skipped=%+v", len(res.Rewritten), res.Skipped)
+	}
+	out := applyAll(t, dir, res)
+
+	a := out["a/a.go"]
+	mustContain(t, a, "func dispatch(ctx context.Context, arg dispatchParams) string {")
+	mustContain(t, a, `dispatch(ctx, dispatchParams{Vm: "vm", Opts: 7, Name: "n", Argv: []byte("x")})`)
+	if strings.Contains(a, "Ctx") {
+		t.Errorf("ctx leaked into the params struct:\n%s", a)
+	}
+	a2 := out["a/a2.go"]
+	mustContain(t, a2, "func Dispatch2(ctx context.Context, arg Dispatch2Params) string {")
+	b := out["b/b.go"]
+	mustContain(t, b, `a.Dispatch2(context.Background(), a.Dispatch2Params{Vm: "vm", Opts: 7, Name: "n", Argv: []byte("x")})`)
+}
+
+func TestCtxArgReferencingRewrittenParamSkips(t *testing.T) {
+	_, pkgs := loadModule(t, map[string]string{
+		"a/a.go": `package a
+
+import "context"
+
+func wrap(s string) context.Context { _ = s; return context.TODO() }
+
+func inner(vm string, ctx context.Context, b, c, d string) string {
+	_ = ctx
+	return vm + b + c + d
+}
+
+// outer is itself structified; its param "name" is renamed to arg.Name,
+// and it appears inside inner's ctx argument — the move would orphan it.
+func outer(name, e2, e3, e4, e5 string) string {
+	return inner("vm", wrap(name), e2, e3, e4) + e5
+}
+
+var _ = outer("n", "a", "b", "c", "d")
+`,
+	})
+	res := plan(t, pkgs)
+	var innerSkip *structify.Target
+	for _, s := range res.Skipped {
+		if s.Name == "inner" {
+			innerSkip = s
+		}
+	}
+	if innerSkip == nil {
+		t.Fatalf("inner not skipped; rewritten=%+v skipped=%+v", res.Rewritten, res.Skipped)
+	}
+	if !strings.Contains(innerSkip.SkipReason, "references a parameter being rewritten") {
+		t.Fatalf("reason = %q", innerSkip.SkipReason)
 	}
 }
 

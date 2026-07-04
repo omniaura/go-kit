@@ -17,7 +17,9 @@
 //	func CreateUser(ctx context.Context, arg CreateUserParams) error
 //
 // with every call site rewritten to CreateUser(ctx, CreateUserParams{Name: …}).
-// A leading context.Context parameter stays positional, per Go convention.
+// A context.Context parameter stays positional, per Go convention — and if
+// it isn't the first parameter, it is REORDERED to the front as part of the
+// rewrite (callers' ctx arguments move with it).
 //
 // Because a signature change is only safe when every reference is visible
 // and rewritable, a function is SKIPPED (diagnosed, not rewritten) when it:
@@ -28,6 +30,9 @@
 //   - has callers in generated files (regeneration would break the build)
 //   - has a caller passing a multi-value call f(g()) or missing an import
 //     needed to name the params struct
+//   - has multiple context.Context parameters, or (when hoisting a
+//     non-leading ctx) a call site whose ctx argument references a
+//     parameter being rewritten
 //   - carries a //go:* or //export directive
 //   - is suppressed with "//lint:ignore structify" (or the funcparamlint
 //     spelling) or "structify:ignore"
@@ -111,11 +116,13 @@ type candidate struct {
 	obj    *types.Func
 	target *Target
 
-	hasCtx     bool
-	fields     []field
-	argName    string
-	structName string
-	qualByFile map[string]string // filename -> qualifier ("", "pkg.")
+	ctxIndex    int    // index of the context.Context param, -1 if none
+	ctxName     string // its name ("_" when blank/unnamed)
+	ctxTypeText string // its type as written in source
+	fields      []field
+	argName     string
+	structName  string
+	qualByFile  map[string]string // filename -> qualifier ("", "pkg.")
 }
 
 // refInfo is one identifier reference to a function object.
@@ -242,7 +249,7 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 					continue
 				}
 				c := &candidate{
-					pkg: p, file: f, decl: fd, obj: obj,
+					pkg: p, file: f, decl: fd, obj: obj, ctxIndex: -1,
 					target: &Target{
 						Name:      declName(fd),
 						Pos:       fset.Position(fd.Name.Pos()),
@@ -275,12 +282,26 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 		return fi.src, nil
 	}
 
+	// Params that will be renamed to arg.Field by ANY candidate: a ctx
+	// argument expression that references one cannot be moved textually.
+	renamed := map[types.Object]bool{}
+	for _, c := range cands {
+		for _, p := range flattenParams(c.decl.Type.Params) {
+			if p.name == nil || p.name.Name == "_" || isContextParam(c.pkg, p) {
+				continue
+			}
+			if o := c.pkg.TypesInfo.Defs[p.name]; o != nil {
+				renamed[o] = true
+			}
+		}
+	}
+
 	for _, c := range cands {
 		fi := fileByName[fset.Position(c.decl.Name.Pos()).Filename]
 		if fi != nil && fi.suppress.ignored(fset, c.decl.Name.Pos()) {
 			continue // suppressed: not even diagnosed
 		}
-		reason := c.plan(fset, ifaces, refsByPos, reserved, src)
+		reason := c.plan(fset, ifaces, refsByPos, reserved, renamed, src)
 		if reason != "" {
 			c.target.SkipReason = reason
 			res.Skipped = append(res.Skipped, c.target)
@@ -298,7 +319,7 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 
 // plan runs the safety gates and fills in the candidate's rewrite plan,
 // returning a skip reason or "".
-func (c *candidate) plan(fset *token.FileSet, ifaces []*types.Interface, refsByPos map[token.Pos][]refInfo, reserved map[*types.Package]map[string]bool, src func(string) ([]byte, error)) string {
+func (c *candidate) plan(fset *token.FileSet, ifaces []*types.Interface, refsByPos map[token.Pos][]refInfo, reserved map[*types.Package]map[string]bool, renamed map[types.Object]bool, src func(string) ([]byte, error)) string {
 	fd := c.decl
 	sig := c.obj.Signature()
 
@@ -312,26 +333,37 @@ func (c *candidate) plan(fset *token.FileSet, ifaces []*types.Interface, refsByP
 		return "carries a //go: or //export directive"
 	}
 
-	// Parameters: split off a leading context.Context, require names.
+	// Parameters. A context.Context stays positional: leading stays put,
+	// non-leading is reordered to the front as part of the rewrite. It
+	// never becomes a struct field (per the context package docs).
 	params := flattenParams(fd.Type.Params)
 	if len(params) == 0 {
 		return "unnamed parameters"
 	}
-	start := 0
-	if isContextParam(c.pkg, params[0]) {
-		c.hasCtx = true
-		start = 1
+	for i, p := range params {
+		if isContextParam(c.pkg, p) {
+			if c.ctxIndex >= 0 {
+				return "multiple context.Context parameters"
+			}
+			c.ctxIndex = i
+			c.ctxName = "_"
+			if p.name != nil && p.name.Name != "" {
+				c.ctxName = p.name.Name
+			}
+			text, err := nodeText(fset, src, p.typ)
+			if err != nil {
+				return "unreadable source"
+			}
+			c.ctxTypeText = text
+		}
 	}
 	fieldNames := map[string]bool{}
-	for _, p := range params[start:] {
+	for i, p := range params {
+		if i == c.ctxIndex {
+			continue
+		}
 		if p.name == nil || p.name.Name == "_" || p.name.Name == "" {
 			return "blank or unnamed parameter"
-		}
-		// A context belongs in the leading position, never in a struct
-		// field (per context package docs). Reorder the params by hand,
-		// then structify keeps it positional.
-		if isContextParam(c.pkg, p) {
-			return "context.Context parameter not in leading position"
 		}
 		fn := fieldName(p.name.Name)
 		if fieldNames[fn] {
@@ -374,11 +406,25 @@ func (c *candidate) plan(fset *token.FileSet, ifaces []*types.Interface, refsByP
 			return "called from generated code"
 		}
 		nargs := len(ref.call.Args)
-		if c.hasCtx {
+		if c.ctxIndex >= 0 {
 			nargs--
 		}
 		if nargs != len(c.fields) {
 			return "caller passes a multi-value call"
+		}
+		// Reordering ctx to the front moves its argument text; that text
+		// must not contain an identifier some rewrite renames to arg.X.
+		if c.ctxIndex > 0 {
+			bad := false
+			ast.Inspect(ref.call.Args[c.ctxIndex], func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok && renamed[ref.pkg.TypesInfo.Uses[id]] {
+					bad = true
+				}
+				return !bad
+			})
+			if bad {
+				return "context argument at a call site references a parameter being rewritten"
+			}
 		}
 	}
 
@@ -472,15 +518,23 @@ func (c *candidate) emit(fset *token.FileSet, refsByPos map[token.Pos][]refInfo,
 	}
 	add(declFile, Edit{Start: off(insertAt), End: off(insertAt), Text: b.String()})
 
-	// 2. Parameter list: replace everything after ctx with "arg Struct".
+	// 2. Parameter list. Leading (or absent) ctx: replace everything
+	// after it with "arg Struct". Non-leading ctx: rewrite the whole
+	// list, hoisting ctx to the front.
 	params := flattenParams(fd.Type.Params)
-	first := 0
-	if c.hasCtx {
-		first = 1
-	}
-	pstart := params[first].fieldStart
 	pend := fd.Type.Params.Closing
-	add(declFile, Edit{Start: off(pstart), End: off(pend), Text: c.argName + " " + c.structName})
+	if c.ctxIndex <= 0 {
+		first := 0
+		if c.ctxIndex == 0 {
+			first = 1
+		}
+		pstart := params[first].fieldStart
+		add(declFile, Edit{Start: off(pstart), End: off(pend), Text: c.argName + " " + c.structName})
+	} else {
+		pstart := params[0].fieldStart
+		text := c.ctxName + " " + c.ctxTypeText + ", " + c.argName + " " + c.structName
+		add(declFile, Edit{Start: off(pstart), End: off(pend), Text: text})
+	}
 
 	// 3. Body: param uses become arg.Field.
 	paramObj := map[types.Object]string{}
@@ -500,18 +554,37 @@ func (c *candidate) emit(fset *token.FileSet, refsByPos map[token.Pos][]refInfo,
 		return true
 	})
 
-	// 4. Call sites: pure insertions around the existing arguments.
+	// 4. Call sites. With ctx leading or absent these are pure insertions
+	// around the existing arguments. With a hoisted ctx, its argument text
+	// additionally moves to the front (safe: the gate above proved it
+	// contains nothing being renamed).
 	for _, ref := range refsByPos[c.obj.Pos()] {
 		call := ref.call
 		args := call.Args
-		if c.hasCtx {
+		qual := c.qualByFile[ref.filename]
+
+		open := qual + c.structName + "{" + c.fields[0].name + ": "
+		if c.ctxIndex > 0 {
+			ctxArg := args[c.ctxIndex]
+			ctxText, err := nodeText(fset, src, ctxArg)
+			if err != nil {
+				return err
+			}
+			// Move: prepend ctx before the first argument, delete it
+			// (and its preceding separator) from its old spot.
+			open = ctxText + ", " + open
+			add(ref.filename, Edit{
+				Start: off(args[c.ctxIndex-1].End()), End: off(ctxArg.End()),
+			})
+			rest := make([]ast.Expr, 0, len(args)-1)
+			rest = append(rest, args[:c.ctxIndex]...)
+			rest = append(rest, args[c.ctxIndex+1:]...)
+			args = rest
+		} else if c.ctxIndex == 0 {
 			args = args[1:]
 		}
-		qual := c.qualByFile[ref.filename]
-		add(ref.filename, Edit{
-			Start: off(args[0].Pos()), End: off(args[0].Pos()),
-			Text: qual + c.structName + "{" + c.fields[0].name + ": ",
-		})
+
+		add(ref.filename, Edit{Start: off(args[0].Pos()), End: off(args[0].Pos()), Text: open})
 		for k := 1; k < len(args); k++ {
 			add(ref.filename, Edit{
 				Start: off(args[k].Pos()), End: off(args[k].Pos()),
