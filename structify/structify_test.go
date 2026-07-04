@@ -53,7 +53,7 @@ func load(t *testing.T, dir string) []*packages.Package {
 // plan is a convenience wrapper.
 func plan(t *testing.T, pkgs []*packages.Package) *structify.Result {
 	t.Helper()
-	res, err := structify.Plan(pkgs, structify.Config{})
+	res, err := structify.Plan(pkgs, structify.Config{MaxParams: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,5 +668,47 @@ var _ = F(1, 2, 3, 4, 5)
 	msg := fmt.Sprintf("%s: %d params -> %s", tgt.Name, tgt.NumParams, tgt.StructName)
 	if msg == "" {
 		t.Fatal("unreachable")
+	}
+}
+
+func TestDefaultThresholdExcludesLeadingCtx(t *testing.T) {
+	_, pkgs := loadModule(t, map[string]string{
+		"a/a.go": `package a
+
+import "context"
+
+// ctx + 5 substantive: fine under the default.
+func CtxFive(ctx context.Context, a1, a2, a3, a4, a5 int) int { _ = ctx; return a1 + a2 + a3 + a4 + a5 }
+
+// ctx + 6 substantive: flagged.
+func CtxSix(ctx context.Context, a1, a2, a3, a4, a5, a6 int) int { _ = ctx; return a1 + a2 + a3 + a4 + a5 + a6 }
+
+// 5 substantive, no ctx: fine.
+func Five(a1, a2, a3, a4, a5 int) int { return a1 + a2 + a3 + a4 + a5 }
+
+// 6 substantive, no ctx: flagged.
+func Six(a1, a2, a3, a4, a5, a6 int) int { return a1 + a2 + a3 + a4 + a5 + a6 }
+
+var (
+	_ = CtxFive(context.TODO(), 1, 2, 3, 4, 5)
+	_ = CtxSix(context.TODO(), 1, 2, 3, 4, 5, 6)
+	_ = Five(1, 2, 3, 4, 5)
+	_ = Six(1, 2, 3, 4, 5, 6)
+)
+`,
+	})
+	res, err := structify.Plan(pkgs, structify.Config{}) // default threshold
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, tgt := range res.Rewritten {
+		got[tgt.Name] = tgt.NumParams
+	}
+	if len(got) != 2 {
+		t.Fatalf("flagged %v, want exactly CtxSix and Six", got)
+	}
+	if got["CtxSix"] != 6 || got["Six"] != 6 {
+		t.Fatalf("flagged %v, want CtxSix:6 and Six:6 (ctx not counted)", got)
 	}
 }

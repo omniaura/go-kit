@@ -8,7 +8,8 @@
 //	structify [flags] [packages]
 //
 //	-fix            rewrite files in place (default: report only)
-//	-max-params N   flag functions with more than N inputs (default 4)
+//	-max-params N   flag functions with more than N significant inputs
+//	                (a leading context.Context is not counted; default 5)
 //	-generated      also structify functions declared in generated files
 //	-tests          load test files so their call sites are rewritten (default true)
 //	-v              list skipped functions with reasons
@@ -30,7 +31,7 @@ import (
 func main() {
 	var (
 		fix       = flag.Bool("fix", false, "rewrite files in place")
-		maxParams = flag.Int("max-params", 4, "flag functions with more than this many input parameters")
+		maxParams = flag.Int("max-params", 5, "flag functions with more than this many significant input parameters (a leading context.Context is not counted)")
 		generated = flag.Bool("generated", false, "also structify functions declared in generated files")
 		tests     = flag.Bool("tests", true, "load test files so their call sites are rewritten")
 		verbose   = flag.Bool("v", false, "list skipped functions with reasons")
@@ -62,11 +63,11 @@ func main() {
 
 	if !*fix {
 		for _, t := range res.Rewritten {
-			fmt.Printf("%s: %s has %d input parameters; structify would generate %s and rewrite %d call sites\n",
+			fmt.Printf("%s: %s has %d non-context input parameters; structify would generate %s and rewrite %d call sites\n",
 				t.Pos, t.Name, t.NumParams, t.StructName, t.NumCallers)
 		}
 		for _, t := range res.Skipped {
-			fmt.Printf("%s: %s has %d input parameters; cannot auto-fix: %s\n", t.Pos, t.Name, t.NumParams, t.SkipReason)
+			fmt.Printf("%s: %s has %d non-context input parameters; cannot auto-fix: %s\n", t.Pos, t.Name, t.NumParams, t.SkipReason)
 		}
 		if len(res.Rewritten)+len(res.Skipped) > 0 {
 			os.Exit(1)

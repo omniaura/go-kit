@@ -58,9 +58,11 @@ import (
 
 // Config controls detection.
 type Config struct {
-	// MaxParams: functions with more input parameters than this are
-	// candidates. The count includes a leading context.Context, matching
-	// funcparamlint. Default 4.
+	// MaxParams: functions with more SUBSTANTIVE input parameters than
+	// this are candidates. A leading context.Context is boilerplate, not
+	// an input, and is excluded from the count — so the default of 5
+	// flags func(ctx, a, b, c, d, e, f) and func(a, b, c, d, e, f)
+	// alike. Default 5.
 	MaxParams int
 	// Generated: also structify functions declared in generated files.
 	// Callers in generated files always block a rewrite regardless.
@@ -71,7 +73,7 @@ func (c Config) maxParams() int {
 	if c.MaxParams > 0 {
 		return c.MaxParams
 	}
-	return 4
+	return 5
 }
 
 // Edit is a text edit in a file: replace [Start, End) with Text.
@@ -89,7 +91,8 @@ type Target struct {
 	Pos token.Position
 	// StructName is the generated params struct name (empty when skipped).
 	StructName string
-	// NumParams is the input parameter count that triggered detection.
+	// NumParams is the significant input parameter count that triggered
+	// detection (a leading context.Context is not counted).
 	NumParams int
 	// NumCallers is the number of rewritten call sites.
 	NumCallers int
@@ -254,7 +257,7 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 					continue
 				}
 				seenDecl[fd.Name.Pos()] = true
-				n := paramCount(fd.Type.Params)
+				n := substantiveParamCount(p.TypesInfo, fd.Type.Params)
 				if n <= cfg.maxParams() {
 					continue
 				}
@@ -311,7 +314,7 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 	renamed := map[types.Object]bool{}
 	for _, c := range cands {
 		for _, p := range flattenParams(c.decl.Type.Params) {
-			if p.name == nil || p.name.Name == "_" || isContextParam(c.pkg, p) {
+			if p.name == nil || p.name.Name == "_" || isContextParam(c.pkg.TypesInfo, p) {
 				continue
 			}
 			if o := c.pkg.TypesInfo.Defs[p.name]; o != nil {
@@ -365,7 +368,7 @@ func (c *candidate) plan(fset *token.FileSet, ifaces []*types.Interface, refsByP
 		return "unnamed parameters"
 	}
 	for i, p := range params {
-		if isContextParam(c.pkg, p) {
+		if isContextParam(c.pkg.TypesInfo, p) {
 			if c.ctxIndex >= 0 {
 				return "multiple context.Context parameters"
 			}
@@ -661,11 +664,13 @@ func flattenParams(fl *ast.FieldList) []param {
 	return out
 }
 
-func paramCount(fl *ast.FieldList) int {
-	n := 0
-	for _, p := range flattenParams(fl) {
-		_ = p
-		n++
+// substantiveParamCount is paramCount minus a leading context.Context:
+// ctx is boilerplate, not an input being modeled.
+func substantiveParamCount(info *types.Info, fl *ast.FieldList) int {
+	params := flattenParams(fl)
+	n := len(params)
+	if n > 0 && isContextParam(info, params[0]) {
+		n--
 	}
 	return n
 }
@@ -715,11 +720,11 @@ func recvHasTypeParams(recv *ast.FieldList) bool {
 	return false
 }
 
-func isContextParam(p *packages.Package, pr param) bool {
+func isContextParam(info *types.Info, pr param) bool {
 	if pr.typ == nil {
 		return false
 	}
-	t := p.TypesInfo.TypeOf(pr.typ)
+	t := info.TypeOf(pr.typ)
 	return t != nil && t.String() == "context.Context"
 }
 

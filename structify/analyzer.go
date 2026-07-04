@@ -8,8 +8,8 @@ import (
 )
 
 // Analyzer reports functions whose inputs should be grouped into a params
-// struct. Detection matches the classic funcparamlint rule: more than four
-// input parameters (including a leading context.Context).
+// struct: more than five substantive input parameters. A leading
+// context.Context is boilerplate, not an input, and is not counted.
 //
 // The analyzer only diagnoses; rewriting requires whole-program knowledge
 // of every caller, which is cmd/structify's job.
@@ -22,7 +22,7 @@ var Analyzer = &analysis.Analyzer{
 	Run: runAnalyzer,
 }
 
-const analyzerMaxParams = 4
+const analyzerMaxParams = 5
 
 func runAnalyzer(pass *analysis.Pass) (any, error) {
 	for _, file := range pass.Files {
@@ -37,7 +37,7 @@ func runAnalyzer(pass *analysis.Pass) (any, error) {
 				if n.Body == nil {
 					return true
 				}
-				count := paramCount(n.Type.Params)
+				count := substantiveParamCount(pass.TypesInfo, n.Type.Params)
 				if count <= analyzerMaxParams || sup.ignored(pass.Fset, n.Name.Pos()) {
 					return true
 				}
@@ -45,13 +45,13 @@ func runAnalyzer(pass *analysis.Pass) (any, error) {
 				if n.Recv != nil {
 					kind, suggestion = "method", "move inputs into a request/options struct"
 				}
-				pass.Reportf(n.Name.Pos(), "%s %s has %d input parameters; %s", kind, n.Name.Name, count, suggestion)
+				pass.Reportf(n.Name.Pos(), "%s %s has %d non-context input parameters; %s", kind, n.Name.Name, count, suggestion)
 			case *ast.FuncLit:
-				count := paramCount(n.Type.Params)
+				count := substantiveParamCount(pass.TypesInfo, n.Type.Params)
 				if count <= analyzerMaxParams || sup.ignored(pass.Fset, n.Type.Func) {
 					return true
 				}
-				pass.Reportf(n.Type.Func, "function literal has %d input parameters; move inputs into an input struct before wiring this behavior", count)
+				pass.Reportf(n.Type.Func, "function literal has %d non-context input parameters; move inputs into an input struct before wiring this behavior", count)
 			}
 			return true
 		})
