@@ -31,8 +31,10 @@
 //   - has a caller passing a multi-value call f(g()) or missing an import
 //     needed to name the params struct
 //   - has multiple context.Context parameters, or (when hoisting a
-//     non-leading ctx) a call site whose ctx argument references a
-//     parameter being rewritten
+//     non-leading ctx) a call site where the move could be observable:
+//     the ctx argument references a parameter being rewritten, is not a
+//     bare ident or context.Background()/TODO(), or follows an argument
+//     with side effects (evaluation order must be preserved)
 //   - carries a //go:* or //export directive
 //   - is suppressed with "//lint:ignore structify" (or the funcparamlint
 //     spelling) or "structify:ignore"
@@ -447,6 +449,20 @@ func (c *candidate) plan(fset *token.FileSet, ifaces []*types.Interface, refsByP
 			if bad {
 				return "context argument at a call site references a parameter being rewritten"
 			}
+			// Hoisting also moves the ctx EVALUATION ahead of the args
+			// that preceded it. That is only unobservable when the ctx
+			// expression itself is effect- and panic-free (a bare ident,
+			// or context.Background()/TODO()) and nothing before it can
+			// produce effects or mutate what the ctx expression reads
+			// (no calls, receives, or closures among earlier args).
+			if !safeCtxExpr(ref.pkg, ref.call.Args[c.ctxIndex]) {
+				return "hoisting ctx would change argument evaluation order (ctx argument is not a plain ident or context.Background/TODO)"
+			}
+			for _, prev := range ref.call.Args[:c.ctxIndex] {
+				if !effectFree(ref.pkg, prev) {
+					return "hoisting ctx would change argument evaluation order (effectful argument before ctx at a call site)"
+				}
+			}
 		}
 	}
 
@@ -763,6 +779,53 @@ func qualifierFor(ref refInfo, target *packages.Package) (string, bool) {
 		return target.Types.Name() + ".", true
 	}
 	return "", false
+}
+
+// safeCtxExpr reports whether evaluating expr early is unobservable: a
+// bare identifier (no effects, cannot panic) or one of the well-known
+// pure constructors context.Background() / context.TODO().
+func safeCtxExpr(p *packages.Package, expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return true
+	case *ast.CallExpr:
+		sel, ok := e.Fun.(*ast.SelectorExpr)
+		if !ok || len(e.Args) != 0 {
+			return false
+		}
+		fn, ok := p.TypesInfo.Uses[sel.Sel].(*types.Func)
+		if !ok || fn.Pkg() == nil {
+			return false
+		}
+		return fn.Pkg().Path() == "context" && (fn.Name() == "Background" || fn.Name() == "TODO")
+	default:
+		return false
+	}
+}
+
+// effectFree reports whether expr can neither produce side effects nor
+// mutate variables: no function calls (type conversions are fine), no
+// channel receives, no function literals. Such expressions may still
+// panic, but reordering a safeCtxExpr around them is unobservable.
+func effectFree(p *packages.Package, expr ast.Expr) bool {
+	free := true
+	ast.Inspect(expr, func(n ast.Node) bool {
+		switch e := n.(type) {
+		case *ast.CallExpr:
+			// A conversion (T(x)) has no observable effects; a call does.
+			if tv, ok := p.TypesInfo.Types[e.Fun]; !ok || !tv.IsType() {
+				free = false
+			}
+		case *ast.UnaryExpr:
+			if e.Op == token.ARROW {
+				free = false
+			}
+		case *ast.FuncLit:
+			free = false
+		}
+		return free
+	})
+	return free
 }
 
 func samePath(a, b *packages.Package) bool {

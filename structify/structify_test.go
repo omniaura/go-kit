@@ -417,6 +417,40 @@ var _ = F(context.TODO(), "b", "c", "d", context.TODO())
 			reason: "multiple context.Context",
 		},
 		{
+			name: "effectful arg before hoisted ctx",
+			src: `package a
+
+import "context"
+
+func eff() string { return "e" }
+
+func F(vm string, ctx context.Context, b, c, d string) string {
+	_ = ctx
+	return vm + b + c + d
+}
+
+var _ = F(eff(), context.TODO(), "b", "c", "d")
+`,
+			reason: "evaluation order",
+		},
+		{
+			name: "ctx argument is an arbitrary call",
+			src: `package a
+
+import "context"
+
+func mkCtx() context.Context { return context.TODO() }
+
+func F(vm string, ctx context.Context, b, c, d string) string {
+	_ = ctx
+	return vm + b + c + d
+}
+
+var _ = F("v", mkCtx(), "b", "c", "d")
+`,
+			reason: "evaluation order",
+		},
+		{
 			name: "param reused on := left side",
 			src: `package a
 func F(cfg, b, c, d, e string) (string, error) {
