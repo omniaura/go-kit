@@ -43,11 +43,12 @@
 package structify
 
 import (
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
-	"sort"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -159,6 +160,7 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 	callee := map[*ast.Ident]*ast.CallExpr{}
 	// refs by target key (position of the object's declaration)
 	refsByPos := map[token.Pos][]refInfo{}
+	seenRef := map[[2]token.Pos]bool{}
 	// interface method names -> interfaces (for the implements gate)
 	var ifaces []*types.Interface
 
@@ -186,19 +188,35 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 				}
 				return true
 			})
-			for ident, obj := range p.TypesInfo.Uses {
-				fn, ok := obj.(*types.Func)
-				if !ok || fn.Pos() == token.NoPos {
-					continue
-				}
-				if fset.File(ident.Pos()) == nil || fset.Position(ident.Pos()).Filename != filename {
-					continue
-				}
-				refsByPos[fn.Pos()] = append(refsByPos[fn.Pos()], refInfo{
-					pkg: p, file: f, filename: filename, ident: ident,
-					call: callee[ident], generated: fi.generated,
-				})
+		}
+		// One Uses pass per package (not per file). With Tests:true the
+		// same non-test file is type-checked again in the test variant;
+		// dedupe refs by position so call sites are counted once.
+		genByName := map[string]bool{}
+		fileNodeByName := map[string]*ast.File{}
+		for i, f := range p.Syntax {
+			genByName[p.CompiledGoFiles[i]] = ast.IsGenerated(f)
+			fileNodeByName[p.CompiledGoFiles[i]] = f
+		}
+		for ident, obj := range p.TypesInfo.Uses {
+			fn, ok := obj.(*types.Func)
+			if !ok || fn.Pos() == token.NoPos || fset.File(ident.Pos()) == nil {
+				continue
 			}
+			filename := fset.Position(ident.Pos()).Filename
+			f, ok := fileNodeByName[filename]
+			if !ok {
+				continue
+			}
+			key := [2]token.Pos{fn.Pos(), ident.Pos()}
+			if seenRef[key] {
+				continue
+			}
+			seenRef[key] = true
+			refsByPos[fn.Pos()] = append(refsByPos[fn.Pos()], refInfo{
+				pkg: p, file: f, filename: filename, ident: ident,
+				call: callee[ident], generated: genByName[filename],
+			})
 		}
 		// Collect interfaces for the implements gate.
 		scope := p.Types.Scope()
@@ -261,8 +279,12 @@ func Plan(pkgs []*packages.Package, cfg Config) (*Result, error) {
 			}
 		}
 	})
-	sort.Slice(cands, func(i, j int) bool {
-		return cands[i].target.Pos.String() < cands[j].target.Pos.String()
+	slices.SortFunc(cands, func(a, b *candidate) int {
+		return cmp.Or(
+			strings.Compare(a.target.Pos.Filename, b.target.Pos.Filename),
+			cmp.Compare(a.target.Pos.Line, b.target.Pos.Line),
+			cmp.Compare(a.target.Pos.Column, b.target.Pos.Column),
+		)
 	})
 
 	// ---- Pass 3: gate and plan each candidate ------------------------
@@ -811,11 +833,8 @@ func dedupEdits(edits map[string][]Edit) {
 // Apply applies edits to src (sorted descending by Start; insertions at the
 // same offset keep their emit order).
 func Apply(src []byte, edits []Edit) []byte {
-	sort.SliceStable(edits, func(i, j int) bool {
-		if edits[i].Start != edits[j].Start {
-			return edits[i].Start > edits[j].Start
-		}
-		return edits[i].End > edits[j].End
+	slices.SortStableFunc(edits, func(a, b Edit) int {
+		return cmp.Or(cmp.Compare(b.Start, a.Start), cmp.Compare(b.End, a.End))
 	})
 	out := src
 	for _, e := range edits {

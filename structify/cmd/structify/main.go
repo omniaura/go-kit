@@ -74,17 +74,27 @@ func main() {
 		return
 	}
 
+	// Rewrites are cross-file by design (a signature change plus all its
+	// callers), so validate and format EVERYTHING before writing anything:
+	// a mid-loop failure must not leave a half-applied, non-compiling tree.
+	type rewritten struct {
+		filename string
+		data     []byte
+	}
+	outputs := make([]rewritten, 0, len(res.Edits))
 	for filename, edits := range res.Edits {
 		src, err := os.ReadFile(filename)
 		if err != nil {
 			fatal(err)
 		}
-		out := structify.Apply(src, edits)
-		formatted, err := format.Source(out)
+		formatted, err := format.Source(structify.Apply(src, edits))
 		if err != nil {
 			fatal(fmt.Errorf("%s: formatting after rewrite: %w", filename, err))
 		}
-		if err := os.WriteFile(filename, formatted, 0o644); err != nil {
+		outputs = append(outputs, rewritten{filename, formatted})
+	}
+	for _, out := range outputs {
+		if err := os.WriteFile(out.filename, out.data, 0o644); err != nil {
 			fatal(err)
 		}
 	}
