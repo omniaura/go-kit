@@ -189,6 +189,65 @@ func UnkeyedStructs(info *types.Info, files []*ast.File) map[*types.Struct]bool 
 	return unkeyedStructs(info, files)
 }
 
+// An UnkeyedLit is one unkeyed composite literal of a struct type. It
+// carries what a fixer needs to rewrite the literal into keyed form
+// ("keyify"): keyed elements bind by name, so a keyified literal stays
+// correct when the struct's fields are reordered.
+type UnkeyedLit struct {
+	// Type is the struct being constructed.
+	Type *types.Struct
+	// EltPos is the start position of each element, in literal order
+	// (= declaration order of the fields).
+	EltPos []token.Pos
+	// FieldNames are the declaration-order field names to key with.
+	FieldNames []string
+	// Keyifiable is false when the literal cannot be rewritten keyed
+	// (the struct has a blank "_" field, which keyed literals cannot
+	// name). Such literals must keep blocking reorder of their type.
+	Keyifiable bool
+}
+
+// UnkeyedLits returns every unkeyed struct composite literal in files,
+// including elided-type element literals like the rows of
+// []struct{...}{{...}, {...}}.
+func UnkeyedLits(info *types.Info, files []*ast.File) []UnkeyedLit {
+	var lits []UnkeyedLit
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok || len(lit.Elts) == 0 {
+				return true
+			}
+			for _, elt := range lit.Elts {
+				if _, ok := elt.(*ast.KeyValueExpr); ok {
+					return true
+				}
+			}
+			tv, ok := info.Types[lit]
+			if !ok {
+				return true
+			}
+			st, ok := tv.Type.Underlying().(*types.Struct)
+			if !ok {
+				return true
+			}
+			ul := UnkeyedLit{Type: st, Keyifiable: st.NumFields() == len(lit.Elts)}
+			for _, elt := range lit.Elts {
+				ul.EltPos = append(ul.EltPos, elt.Pos())
+			}
+			for field := range st.Fields() {
+				if field.Name() == "_" {
+					ul.Keyifiable = false
+				}
+				ul.FieldNames = append(ul.FieldNames, field.Name())
+			}
+			lits = append(lits, ul)
+			return true
+		})
+	}
+	return lits
+}
+
 // DeferIdenticalSkips clears the edit on every fixable fix whose struct
 // type is identical (ignoring tags) to that of a fix that cannot be
 // applied in the same batch. Distinct spellings of one anonymous struct

@@ -15,6 +15,10 @@
 //	-fix            rewrite files in place (default: report only)
 //	-generated      also rewrite generated files (default true)
 //	-tests          include test files (default true)
+//	-keyify         with -fix: rewrite unkeyed composite literals of a
+//	                struct that needs reordering into keyed form (keyed
+//	                elements bind by name), then reorder it — clears the
+//	                "unkeyed literals" blocker, e.g. for table tests
 //	-summary        print a memory-savings summary (default true with -fix)
 //	-max-passes N   fixpoint iterations for nested structs (default 5)
 //	-v              per-struct detail for structs left unfixed
@@ -46,6 +50,7 @@ func main() {
 		generated = flag.Bool("generated", true, "also rewrite generated files")
 		tests     = flag.Bool("tests", true, "include test files")
 		summary   = flag.Bool("summary", true, "print a memory-savings summary after -fix")
+		keyify    = flag.Bool("keyify", false, "rewrite unkeyed composite literals to keyed form when that unblocks a reorder")
 		maxPasses = flag.Int("max-passes", 5, "fixpoint iterations for nested structs")
 		verbose   = flag.Bool("v", false, "per-struct detail for structs left unfixed")
 	)
@@ -59,6 +64,7 @@ func main() {
 		fix:       *fix,
 		generated: *generated,
 		tests:     *tests,
+		keyify:    *keyify && *fix,
 		maxPasses: *maxPasses,
 		verbose:   *verbose,
 	}
@@ -89,6 +95,7 @@ type runner struct {
 	fix       bool
 	generated bool
 	tests     bool
+	keyify    bool
 	maxPasses int
 	verbose   bool
 
@@ -129,14 +136,37 @@ func (r *runner) onePass(patterns []string, pass int) (changed bool, err error) 
 	}
 
 	// Struct types constructed with unkeyed composite literals anywhere
-	// in the loaded set must not be reordered.
+	// in the loaded set must not be reordered — unless -keyify is on, in
+	// which case keyifiable literals are rewritten to keyed form in the
+	// same pass (keyed elements bind by name, so reordering is then
+	// safe). Literals that cannot be keyified (blank "_" fields) keep
+	// blocking their type.
 	unkeyed := make(map[*types.Struct]bool)
+	type litInsert struct {
+		filename string
+		offset   int
+		name     string
+	}
+	type keyifiableLit struct {
+		typ     *types.Struct
+		inserts []litInsert
+	}
+	var keyLits []keyifiableLit
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		if p.TypesInfo == nil {
 			return
 		}
-		for st := range fieldalign.UnkeyedStructs(p.TypesInfo, p.Syntax) {
-			unkeyed[st] = true
+		for _, lit := range fieldalign.UnkeyedLits(p.TypesInfo, p.Syntax) {
+			if !r.keyify || !lit.Keyifiable {
+				unkeyed[lit.Type] = true
+				continue
+			}
+			kl := keyifiableLit{typ: lit.Type}
+			for i, pos := range lit.EltPos {
+				position := p.Fset.Position(pos)
+				kl.inserts = append(kl.inserts, litInsert{position.Filename, position.Offset, lit.FieldNames[i]})
+			}
+			keyLits = append(keyLits, kl)
 		}
 	})
 
@@ -183,8 +213,62 @@ func (r *runner) onePass(patterns []string, pass int) (changed bool, err error) 
 	}
 	fieldalign.DeferIdenticalSkips(all)
 
+	// With -keyify: rewrite unkeyed literals of every struct type that
+	// has a pending reorder into keyed form, in the same pass. Keyed
+	// elements bind by name, so the reorder can no longer break them —
+	// even when the reorder itself is deferred to a later pass. Literals
+	// of already-optimal struct types are left untouched.
+	inserts := make(map[string][]insertEdit) // filename -> inserts
+	if r.fix && r.keyify && len(keyLits) > 0 {
+		var reorderTypes []*types.Struct
+		for _, f := range all {
+			if f.Type != nil && !strings.Contains(f.SkipReason, "unkeyed") {
+				reorderTypes = append(reorderTypes, f.Type)
+			}
+		}
+		insertSeen := make(map[string]bool) // file:offset dedupe across pkg/pkg.test
+		for _, kl := range keyLits {
+			needed := false
+			for _, rt := range reorderTypes {
+				if types.IdenticalIgnoreTags(kl.typ, rt) {
+					needed = true
+					break
+				}
+			}
+			if !needed {
+				continue
+			}
+			for _, ins := range kl.inserts {
+				key := fmt.Sprintf("%s:%d", ins.filename, ins.offset)
+				if insertSeen[key] {
+					continue
+				}
+				insertSeen[key] = true
+				inserts[ins.filename] = append(inserts[ins.filename], insertEdit{ins.offset, ins.name})
+			}
+		}
+		// Files that only contain literals to keyify (no struct fixes)
+		// still need a rewrite entry.
+		haveWork := make(map[string]bool, len(works))
+		for _, w := range works {
+			haveWork[w.filename] = true
+		}
+		for filename := range inserts {
+			if haveWork[filename] || !seen[filename] {
+				continue
+			}
+			src, err := os.ReadFile(filename)
+			if err != nil {
+				return changed, err
+			}
+			works = append(works, fileWork{nil, filename, src, false, nil})
+		}
+	}
+
 	for _, w := range works {
-		r.found = true
+		if len(w.fixes) > 0 {
+			r.found = true
+		}
 		if !r.fix {
 			for i := range w.fixes {
 				pos := w.fset.Position(w.fixes[i].Pos)
@@ -192,7 +276,7 @@ func (r *runner) onePass(patterns []string, pass int) (changed bool, err error) 
 			}
 			continue
 		}
-		didEdit, err := r.applyFixes(w.fset, w.filename, w.src, w.fixes, pass, w.isGen)
+		didEdit, err := r.applyFixes(w.fset, w.filename, w.src, w.fixes, inserts[w.filename], pass, w.isGen)
 		if err != nil {
 			return changed, err
 		}
@@ -201,12 +285,22 @@ func (r *runner) onePass(patterns []string, pass int) (changed bool, err error) 
 	return changed, nil
 }
 
-func (r *runner) applyFixes(fset *token.FileSet, filename string, src []byte, fixes []fieldalign.Fix, pass int, isGen bool) (bool, error) {
+// insertEdit inserts "name: " before the element at offset, converting
+// one element of an unkeyed composite literal to keyed form.
+type insertEdit struct {
+	offset int
+	name   string
+}
+
+func (r *runner) applyFixes(fset *token.FileSet, filename string, src []byte, fixes []fieldalign.Fix, inserts []insertEdit, pass int, isGen bool) (bool, error) {
 	type edit struct {
 		start, end int
 		text       []byte
 	}
 	var edits []edit
+	for _, ins := range inserts {
+		edits = append(edits, edit{start: ins.offset, end: ins.offset, text: []byte(ins.name + ": ")})
+	}
 	for i := range fixes {
 		fix := &fixes[i]
 		pos := fset.Position(fix.Pos)
