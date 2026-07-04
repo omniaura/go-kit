@@ -327,6 +327,12 @@ func (c *candidate) plan(fset *token.FileSet, ifaces []*types.Interface, refsByP
 		if p.name == nil || p.name.Name == "_" || p.name.Name == "" {
 			return "blank or unnamed parameter"
 		}
+		// A context belongs in the leading position, never in a struct
+		// field (per context package docs). Reorder the params by hand,
+		// then structify keeps it positional.
+		if isContextParam(c.pkg, p) {
+			return "context.Context parameter not in leading position"
+		}
 		fn := fieldName(p.name.Name)
 		if fieldNames[fn] {
 			return fmt.Sprintf("parameters %q collide as field %s", p.name.Name, fn)

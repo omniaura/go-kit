@@ -368,6 +368,21 @@ var _ = F(1, 2, 3, 4, 5)
 			reason: "generic",
 		},
 		{
+			name: "ctx not in leading position",
+			src: `package a
+
+import "context"
+
+func F(vm string, ctx context.Context, b, c, d string) string {
+	_ = ctx
+	return vm + b + c + d
+}
+
+var _ = F("v", context.TODO(), "b", "c", "d")
+`,
+			reason: "not in leading position",
+		},
+		{
 			name: "param reused on := left side",
 			src: `package a
 func F(cfg, b, c, d, e string) (string, error) {
