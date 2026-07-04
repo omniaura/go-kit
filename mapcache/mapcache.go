@@ -261,6 +261,34 @@ func (mc *MapCache[K, V]) At(key K) (Item[V], bool) {
 	return item, ok
 }
 
+// Peek returns the currently cached item when present and not stale. Unlike Get,
+// it never invokes an updater.
+func (mc *MapCache[K, V]) Peek(key K, opts ...OptFunc) (Item[V], bool) {
+	var o options
+	for _, opt := range opts {
+		if err := opt(&o); err != nil {
+			return Item[V]{}, false
+		}
+	}
+	item, ok := mc.At(key)
+	if !ok {
+		return Item[V]{}, false
+	}
+	ttl := mc.TTL
+	if o.TTL != nil {
+		ttl = *o.TTL
+	}
+	if isStale(time.Now(), item, ttl) {
+		return Item[V]{}, false
+	}
+	return item, true
+}
+
+// Set writes value for key and resets the item's freshness timestamp.
+func (mc *MapCache[K, V]) Set(key K, value V) Item[V] {
+	return mc.set(key, value, time.Now())
+}
+
 func (mc *MapCache[K, V]) refresh(
 	ctx context.Context,
 	key K,

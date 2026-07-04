@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/omniaura/go-kit/errs"
-	"github.com/omniaura/go-kit/mapcache"
 	"github.com/omniaura/go-kit/net/hit"
 )
 
@@ -257,7 +256,7 @@ func TestGET_CacheSWR(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cache, err := hit.NewMapCache(mapcache.WithTTL(time.Millisecond))
+	cache, err := hit.NewMapCache(hit.WithTTL(time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}

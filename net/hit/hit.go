@@ -1,14 +1,9 @@
-// Package hit provides an ergonomic, builder-pattern HTTP client wrapper
-// around Go's standard net/http library. It supports JSON request/response
-// bodies, fallback responses, embedded filesystem bodies, and pluggable
-// caching with mapcache as the default backend.
+// Package hit provides an ergonomic HTTP client wrapper around net/http.
 package hit
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,55 +12,16 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/omniaura/go-kit/errs"
-	"github.com/omniaura/go-kit/mapcache"
+	"golang.org/x/sync/singleflight"
 )
 
-// Cache is the interface implemented by caching backends.
-type Cache interface {
-	// Get returns the cached value for key, calling up to populate the cache
-	// on a miss or expiration.
-	Get(ctx context.Context, key string, up func() (any, error)) (any, error)
-}
+var defaultFlights singleflight.Group
 
-// SWRCache is implemented by caches that support stale-while-revalidate reads.
-type SWRCache interface {
-	GetSWR(ctx context.Context, key string, up func(context.Context) (any, error)) (any, error)
-}
-
-// MapCache is a Cache implementation backed by mapcache.MapCache.
-type MapCache struct {
-	mc *mapcache.MapCache[string, any]
-}
-
-// NewMapCache creates a new in-memory cache backed by mapcache.
-func NewMapCache(opts ...mapcache.OptFunc) (*MapCache, error) {
-	mc, err := mapcache.New[string, any](opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &MapCache{mc: mc}, nil
-}
-
-// Get implements Cache.
-func (c *MapCache) Get(ctx context.Context, key string, up func() (any, error)) (any, error) {
-	return c.mc.Get(key, up)
-}
-
-// GetSWR implements SWRCache.
-func (c *MapCache) GetSWR(
-	ctx context.Context,
-	key string,
-	up func(context.Context) (any, error),
-) (any, error) {
-	return c.mc.GetSWR(ctx, key, up)
-}
-
-// Request is an HTTP request builder. All fields are private; configuration
-// happens through the builder methods. The type parameter Out is the expected
-// response type.
+// Request is an HTTP request builder. Out is the expected JSON response type.
 type Request[Out any] struct {
 	method        string
 	url           string
@@ -80,113 +36,166 @@ type Request[Out any] struct {
 	cache         Cache
 	cacheKey      string
 	cacheable     bool
+	cacheableSet  bool
 	cacheSWR      bool
+	keyParts      []KeyPart
+	buildErr      error
+	coalesce      bool
+	coalesceSet   bool
+	group         *singleflight.Group
+	limiter       RateLimiter
+	gate          Gate
 	retryPolicy   errs.RetryPolicy
 	retrySet      bool
 	statusRetries errs.StatusRetryPolicy
 }
 
-// GET creates a new GET request builder for the given output type.
+func newRequest[Out any](method, rawURL string, cacheable bool) *Request[Out] {
+	return &Request[Out]{
+		method:    method,
+		url:       rawURL,
+		queries:   make(url.Values),
+		headers:   make(http.Header),
+		cacheable: cacheable,
+	}
+}
+
+func defaultCacheable(method string) bool {
+	return strings.EqualFold(method, http.MethodGet)
+}
+
+// GET creates a GET request builder.
 func GET[Out any](rawURL string) *Request[Out] {
-	return &Request[Out]{
-		method:    http.MethodGet,
-		url:       rawURL,
-		queries:   make(url.Values),
-		headers:   make(http.Header),
-		cacheable: true,
-	}
+	return newRequest[Out](http.MethodGet, rawURL, true)
 }
 
-// POST creates a new POST request builder for the given output type.
+// POST creates a POST request builder.
 func POST[Out any](rawURL string) *Request[Out] {
-	return &Request[Out]{
-		method:    http.MethodPost,
-		url:       rawURL,
-		queries:   make(url.Values),
-		headers:   make(http.Header),
-		cacheable: false,
-	}
+	return newRequest[Out](http.MethodPost, rawURL, false)
 }
 
-// PUT creates a new PUT request builder for the given output type.
+// PUT creates a PUT request builder.
 func PUT[Out any](rawURL string) *Request[Out] {
-	return &Request[Out]{
-		method:    http.MethodPut,
-		url:       rawURL,
-		queries:   make(url.Values),
-		headers:   make(http.Header),
-		cacheable: false,
-	}
+	return newRequest[Out](http.MethodPut, rawURL, false)
 }
 
-// PATCH creates a new PATCH request builder for the given output type.
+// PATCH creates a PATCH request builder.
 func PATCH[Out any](rawURL string) *Request[Out] {
-	return &Request[Out]{
-		method:    http.MethodPatch,
-		url:       rawURL,
-		queries:   make(url.Values),
-		headers:   make(http.Header),
-		cacheable: false,
+	return newRequest[Out](http.MethodPatch, rawURL, false)
+}
+
+// DELETE creates a DELETE request builder.
+func DELETE[Out any](rawURL string) *Request[Out] {
+	return newRequest[Out](http.MethodDelete, rawURL, false)
+}
+
+func (r *Request[Out]) setBuildErr(err error) {
+	if err != nil && r.buildErr == nil {
+		r.buildErr = err
 	}
 }
 
-// DELETE creates a new DELETE request builder for the given output type.
-func DELETE[Out any](rawURL string) *Request[Out] {
-	return &Request[Out]{
-		method:    http.MethodDelete,
-		url:       rawURL,
-		queries:   make(url.Values),
-		headers:   make(http.Header),
-		cacheable: false,
+// Method sets the HTTP method.
+func (r *Request[Out]) Method(method string) *Request[Out] {
+	r.method = method
+	if !r.cacheableSet {
+		r.cacheable = defaultCacheable(method)
 	}
+	if !r.coalesceSet {
+		r.coalesce = r.cache != nil && r.cacheable
+	}
+	return r
 }
 
 // WithMethod sets the HTTP method.
 func (r *Request[Out]) WithMethod(method string) *Request[Out] {
-	r.method = method
-	return r
+	return r.Method(method)
 }
 
-// WithURL sets the request URL, overriding any base URL and path.
-func (r *Request[Out]) WithURL(rawURL string) *Request[Out] {
+// URL sets the request URL, overriding base URL and path.
+func (r *Request[Out]) URL(rawURL string) *Request[Out] {
 	r.url = rawURL
 	r.baseURL = ""
 	r.path = ""
 	return r
 }
 
-// WithBaseURL sets the base URL. The final URL is built from baseURL + path
-// when no explicit URL is set.
-func (r *Request[Out]) WithBaseURL(base string) *Request[Out] {
+// WithURL sets the request URL, overriding base URL and path.
+func (r *Request[Out]) WithURL(rawURL string) *Request[Out] {
+	return r.URL(rawURL)
+}
+
+// BaseURL sets the base URL for Path composition.
+func (r *Request[Out]) BaseURL(base string) *Request[Out] {
 	r.baseURL = base
 	r.url = ""
 	return r
 }
 
-// WithPath sets the request path. Use with WithBaseURL to compose URLs.
-func (r *Request[Out]) WithPath(path string) *Request[Out] {
+// WithBaseURL sets the base URL for Path composition.
+func (r *Request[Out]) WithBaseURL(base string) *Request[Out] {
+	return r.BaseURL(base)
+}
+
+// Path sets the request path for BaseURL composition.
+func (r *Request[Out]) Path(path string) *Request[Out] {
+	if r.url != "" && r.baseURL == "" {
+		r.baseURL = r.url
+	}
 	r.path = path
 	r.url = ""
 	return r
 }
 
-// WithQuery adds a query parameter.
-func (r *Request[Out]) WithQuery(key, value string) *Request[Out] {
+// WithPath sets the request path for BaseURL composition.
+func (r *Request[Out]) WithPath(path string) *Request[Out] {
+	return r.Path(path)
+}
+
+// Query adds a query parameter.
+func (r *Request[Out]) Query(key, value string) *Request[Out] {
 	r.queries.Add(key, value)
 	return r
 }
 
-// WithQueries adds multiple query parameters.
-func (r *Request[Out]) WithQueries(queries map[string]string) *Request[Out] {
+// WithQuery adds a query parameter.
+func (r *Request[Out]) WithQuery(key, value string) *Request[Out] {
+	return r.Query(key, value)
+}
+
+// Queries adds multiple query parameters.
+func (r *Request[Out]) Queries(queries map[string]string) *Request[Out] {
 	for k, v := range queries {
 		r.queries.Add(k, v)
 	}
 	return r
 }
 
+// WithQueries adds multiple query parameters.
+func (r *Request[Out]) WithQueries(queries map[string]string) *Request[Out] {
+	return r.Queries(queries)
+}
+
+// Header adds a request header.
+func (r *Request[Out]) Header(key, value string) *Request[Out] {
+	r.headers.Add(key, value)
+	return r
+}
+
 // WithHeader adds a request header.
 func (r *Request[Out]) WithHeader(key, value string) *Request[Out] {
-	r.headers.Add(key, value)
+	return r.Header(key, value)
+}
+
+// Headers adds request headers from key/value pairs.
+func (r *Request[Out]) Headers(pairs ...string) *Request[Out] {
+	if len(pairs)%2 != 0 {
+		r.setBuildErr(fmt.Errorf("headers requires key/value pairs"))
+		return r
+	}
+	for i := 0; i < len(pairs); i += 2 {
+		r.headers.Add(pairs[i], pairs[i+1])
+	}
 	return r
 }
 
@@ -198,40 +207,57 @@ func (r *Request[Out]) WithHeaders(headers map[string]string) *Request[Out] {
 	return r
 }
 
+// Body sets the raw request body.
+func (r *Request[Out]) Body(body []byte) *Request[Out] {
+	r.body = cloneBytes(body)
+	return r
+}
+
 // WithBody sets the raw request body.
 func (r *Request[Out]) WithBody(body []byte) *Request[Out] {
-	r.body = body
+	return r.Body(body)
+}
+
+// BodyString sets the request body from a string.
+func (r *Request[Out]) BodyString(body string) *Request[Out] {
+	r.body = []byte(body)
 	return r
 }
 
 // WithBodyString sets the request body from a string.
 func (r *Request[Out]) WithBodyString(body string) *Request[Out] {
-	r.body = []byte(body)
+	return r.BodyString(body)
+}
+
+// BodyReader reads the provided reader and sets it as the request body.
+func (r *Request[Out]) BodyReader(reader io.Reader) *Request[Out] {
+	if reader == nil {
+		r.body = nil
+		return r
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		r.setBuildErr(err)
+		return r
+	}
+	r.body = body
 	return r
 }
 
 // WithBodyReader reads the provided reader and sets it as the request body.
 func (r *Request[Out]) WithBodyReader(reader io.Reader) *Request[Out] {
-	if reader == nil {
-		r.body = nil
-		return r
-	}
-	body, _ := io.ReadAll(reader)
-	r.body = body
-	return r
+	return r.BodyReader(reader)
 }
 
-// WithJSON marshals v as JSON and sets it as the request body, also setting
-// the Content-Type header to application/json.
-func (r *Request[Out]) WithJSON(v any) *Request[Out] {
+// JSON marshals v as JSON and sets Content-Type to application/json.
+func (r *Request[Out]) JSON(v any) *Request[Out] {
 	if v == nil {
 		r.body = nil
 		return r
 	}
 	body, err := json.Marshal(v)
 	if err != nil {
-		// Store the error as a sentinel body so Do can report it.
-		r.body = []byte("{}")
+		r.setBuildErr(err)
 		return r
 	}
 	r.body = body
@@ -239,39 +265,74 @@ func (r *Request[Out]) WithJSON(v any) *Request[Out] {
 	return r
 }
 
-// WithBodyFS reads the named file from fsys and sets it as the request body.
-func (r *Request[Out]) WithBodyFS(fsys fs.FS, name string) *Request[Out] {
+// WithJSON marshals v as JSON and sets Content-Type to application/json.
+func (r *Request[Out]) WithJSON(v any) *Request[Out] {
+	return r.JSON(v)
+}
+
+// BodyFS reads the named file from fsys and sets it as the request body.
+func (r *Request[Out]) BodyFS(fsys fs.FS, name string) *Request[Out] {
 	body, err := fs.ReadFile(fsys, name)
 	if err != nil {
-		r.body = nil
+		r.setBuildErr(err)
 		return r
 	}
 	r.body = body
 	return r
 }
 
-// WithTimeout sets the request timeout.
-func (r *Request[Out]) WithTimeout(d time.Duration) *Request[Out] {
+// WithBodyFS reads the named file from fsys and sets it as the request body.
+func (r *Request[Out]) WithBodyFS(fsys fs.FS, name string) *Request[Out] {
+	return r.BodyFS(fsys, name)
+}
+
+// Timeout sets the request timeout.
+func (r *Request[Out]) Timeout(d time.Duration) *Request[Out] {
 	r.timeout = d
 	return r
 }
 
-// WithClient overrides the default http.Client.
-func (r *Request[Out]) WithClient(c *http.Client) *Request[Out] {
+// WithTimeout sets the request timeout.
+func (r *Request[Out]) WithTimeout(d time.Duration) *Request[Out] {
+	return r.Timeout(d)
+}
+
+// Client overrides the default HTTP client.
+func (r *Request[Out]) Client(c *http.Client) *Request[Out] {
 	r.client = c
 	return r
 }
 
-// WithFallback sets a static fallback response. The value is marshaled to JSON
-// and unmarshaled into the output on request failure.
-func (r *Request[Out]) WithFallback(v any) *Request[Out] {
+// WithClient overrides the default HTTP client.
+func (r *Request[Out]) WithClient(c *http.Client) *Request[Out] {
+	return r.Client(c)
+}
+
+// Fallback sets a static fallback response.
+func (r *Request[Out]) Fallback(v any) *Request[Out] {
 	if v == nil {
 		r.fallback = nil
 		return r
 	}
 	body, err := json.Marshal(v)
 	if err != nil {
-		r.fallback = nil
+		r.setBuildErr(err)
+		return r
+	}
+	r.fallback = body
+	return r
+}
+
+// WithFallback sets a static fallback response.
+func (r *Request[Out]) WithFallback(v any) *Request[Out] {
+	return r.Fallback(v)
+}
+
+// FallbackFile reads the fallback response from a local file.
+func (r *Request[Out]) FallbackFile(path string) *Request[Out] {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		r.setBuildErr(err)
 		return r
 	}
 	r.fallback = body
@@ -280,9 +341,14 @@ func (r *Request[Out]) WithFallback(v any) *Request[Out] {
 
 // WithFallbackFile reads the fallback response from a local file.
 func (r *Request[Out]) WithFallbackFile(path string) *Request[Out] {
-	body, err := os.ReadFile(path)
+	return r.FallbackFile(path)
+}
+
+// FallbackFS reads the fallback response from the provided filesystem.
+func (r *Request[Out]) FallbackFS(fsys fs.FS, name string) *Request[Out] {
+	body, err := fs.ReadFile(fsys, name)
 	if err != nil {
-		r.fallback = nil
+		r.setBuildErr(err)
 		return r
 	}
 	r.fallback = body
@@ -291,51 +357,75 @@ func (r *Request[Out]) WithFallbackFile(path string) *Request[Out] {
 
 // WithFallbackFS reads the fallback response from the provided filesystem.
 func (r *Request[Out]) WithFallbackFS(fsys fs.FS, name string) *Request[Out] {
-	body, err := fs.ReadFile(fsys, name)
-	if err != nil {
-		r.fallback = nil
-		return r
+	return r.FallbackFS(fsys, name)
+}
+
+// Cache sets the cache backend.
+func (r *Request[Out]) Cache(cache Cache) *Request[Out] {
+	r.cache = cache
+	if !r.coalesceSet {
+		r.coalesce = cache != nil && r.cacheable
 	}
-	r.fallback = body
 	return r
 }
 
-// WithCache sets the cache backend. When set, GET requests are cached by
-// default. Use Cacheable to opt POST/PUT/PATCH/DELETE into caching.
+// WithCache sets the cache backend.
 func (r *Request[Out]) WithCache(cache Cache) *Request[Out] {
-	r.cache = cache
+	return r.Cache(cache)
+}
+
+// CacheKey overrides the derived cache key.
+func (r *Request[Out]) CacheKey(key string) *Request[Out] {
+	r.cacheKey = key
 	return r
 }
 
 // WithCacheKey overrides the derived cache key.
 func (r *Request[Out]) WithCacheKey(key string) *Request[Out] {
-	r.cacheKey = key
-	return r
+	return r.CacheKey(key)
 }
 
-// WithCacheSWR enables stale-while-revalidate reads when the configured cache
-// implements SWRCache.
-func (r *Request[Out]) WithCacheSWR() *Request[Out] {
+// CacheSWR enables stale-while-revalidate reads when the cache supports it.
+func (r *Request[Out]) CacheSWR() *Request[Out] {
 	r.cacheSWR = true
 	return r
 }
 
-// Cacheable toggles whether the request may be cached. GET requests are
-// cacheable by default; other methods are not.
-func (r *Request[Out]) Cacheable(v bool) *Request[Out] {
-	r.cacheable = v
+// WithCacheSWR enables stale-while-revalidate reads when the cache supports it.
+func (r *Request[Out]) WithCacheSWR() *Request[Out] {
+	return r.CacheSWR()
+}
+
+// Key appends cache-key dimensions such as Header, BodyHash, or Field.
+func (r *Request[Out]) Key(parts ...KeyPart) *Request[Out] {
+	r.keyParts = append(r.keyParts, parts...)
 	return r
 }
 
-// WithRetryPolicy configures a fallback retry policy for request errors.
-func (r *Request[Out]) WithRetryPolicy(policy errs.RetryPolicy) *Request[Out] {
+// Cacheable toggles whether the request may use cache.
+func (r *Request[Out]) Cacheable(v bool) *Request[Out] {
+	r.cacheable = v
+	r.cacheableSet = true
+	if !r.coalesceSet {
+		r.coalesce = v && r.cache != nil
+	}
+	return r
+}
+
+// Retry configures a fallback retry policy for request errors.
+func (r *Request[Out]) Retry(policy errs.RetryPolicy) *Request[Out] {
 	r.retryPolicy = policy
 	r.retrySet = true
 	return r
 }
 
-// WithStatusRetry configures retry metadata for a specific HTTP status code.
-func (r *Request[Out]) WithStatusRetry(status int, policy errs.RetryPolicy) *Request[Out] {
+// WithRetryPolicy configures a fallback retry policy for request errors.
+func (r *Request[Out]) WithRetryPolicy(policy errs.RetryPolicy) *Request[Out] {
+	return r.Retry(policy)
+}
+
+// StatusRetry configures retry metadata for a specific HTTP status code.
+func (r *Request[Out]) StatusRetry(status int, policy errs.RetryPolicy) *Request[Out] {
 	if r.statusRetries == nil {
 		r.statusRetries = make(errs.StatusRetryPolicy)
 	}
@@ -343,8 +433,13 @@ func (r *Request[Out]) WithStatusRetry(status int, policy errs.RetryPolicy) *Req
 	return r
 }
 
-// WithStatusRetryPolicy configures status-code retry metadata.
-func (r *Request[Out]) WithStatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out] {
+// WithStatusRetry configures retry metadata for a specific HTTP status code.
+func (r *Request[Out]) WithStatusRetry(status int, policy errs.RetryPolicy) *Request[Out] {
+	return r.StatusRetry(status, policy)
+}
+
+// StatusRetryPolicy configures status-code retry metadata.
+func (r *Request[Out]) StatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out] {
 	if len(policy) == 0 {
 		r.statusRetries = nil
 		return r
@@ -356,15 +451,45 @@ func (r *Request[Out]) WithStatusRetryPolicy(policy errs.StatusRetryPolicy) *Req
 	return r
 }
 
-// buildURL returns the final URL string with query parameters applied.
+// WithStatusRetryPolicy configures status-code retry metadata.
+func (r *Request[Out]) WithStatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out] {
+	return r.StatusRetryPolicy(policy)
+}
+
+// Coalesce toggles duplicate concurrent request suppression.
+// Cached requests coalesce by default; uncached requests do not.
+func (r *Request[Out]) Coalesce(v bool) *Request[Out] {
+	r.coalesce = v
+	r.coalesceSet = true
+	return r
+}
+
+// Group sets the singleflight group used for request coalescing.
+func (r *Request[Out]) Group(group *singleflight.Group) *Request[Out] {
+	r.group = group
+	return r
+}
+
+// Rate sets a blocking request rate limiter.
+func (r *Request[Out]) Rate(limiter RateLimiter) *Request[Out] {
+	r.limiter = limiter
+	return r
+}
+
+// Gate sets a concurrency gate.
+func (r *Request[Out]) Gate(gate Gate) *Request[Out] {
+	r.gate = gate
+	return r
+}
+
 func (r *Request[Out]) buildURL() (string, error) {
 	var raw string
 	if r.url != "" {
 		raw = r.url
 	} else {
-		raw = r.baseURL + r.path
+		raw = strings.TrimRight(r.baseURL, "/") + "/" + strings.TrimLeft(r.path, "/")
 	}
-	if raw == "" {
+	if strings.TrimSpace(raw) == "" || raw == "/" {
 		return "", fmt.Errorf("no URL configured")
 	}
 	u, err := url.Parse(raw)
@@ -383,25 +508,65 @@ func (r *Request[Out]) buildURL() (string, error) {
 	return u.String(), nil
 }
 
-// cacheKey returns the cache key for this request.
-func (r *Request[Out]) cacheKeyValue() string {
-	if r.cacheKey != "" {
-		return r.cacheKey
+func (r *Request[Out]) newHTTPRequest(ctx context.Context) (*http.Request, context.CancelFunc, error) {
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		req, err := r.requestWithContext(ctx)
+		if err != nil {
+			cancel()
+			return nil, nil, err
+		}
+		return req, cancel, nil
 	}
-	u, err := r.buildURL()
+	req, err := r.requestWithContext(ctx)
 	if err != nil {
-		u = ""
+		return nil, nil, err
 	}
-	h := sha256.New()
-	h.Write([]byte(r.method))
-	h.Write([]byte("|"))
-	h.Write([]byte(u))
-	h.Write([]byte("|"))
-	h.Write(r.body)
-	return hex.EncodeToString(h.Sum(nil))
+	return req, func() {}, nil
 }
 
-// httpClient returns the configured or default HTTP client.
+func (r *Request[Out]) requestWithContext(ctx context.Context) (*http.Request, error) {
+	u, err := r.buildURL()
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, r.method, u, bytes.NewReader(r.body))
+	if err != nil {
+		return nil, err
+	}
+	for key, values := range r.headers {
+		for _, v := range values {
+			req.Header.Add(key, v)
+		}
+	}
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "application/json")
+	}
+	return req, nil
+}
+
+func (r *Request[Out]) cacheKeyValue(ctx context.Context, req *http.Request) (string, error) {
+	if r.cacheKey != "" {
+		return r.cacheKey, nil
+	}
+	var b strings.Builder
+	b.WriteString(baseCacheKey(r.method, req.URL))
+	appendHeaderKeyPart(&b, req.Header, "Authorization")
+	if len(r.body) > 0 && !strings.EqualFold(r.method, http.MethodGet) {
+		appendHashedKeyPart(&b, "body", "", r.body)
+	}
+	for _, part := range r.keyParts {
+		if part == nil {
+			return "", keyPartError(part)
+		}
+		if err := part.appendCacheKey(ctx, req, r.body, &b); err != nil {
+			return "", err
+		}
+	}
+	return b.String(), nil
+}
+
 func (r *Request[Out]) httpClient() *http.Client {
 	if r.client != nil {
 		return r.client
@@ -410,72 +575,139 @@ func (r *Request[Out]) httpClient() *http.Client {
 }
 
 // Do executes the request and decodes the JSON response into out.
-//
-// If a fallback response is configured and the request fails or returns a
-// non-2xx status, out is populated from the fallback and a nil error is
-// returned unless fallback decoding also fails.
 func (r *Request[Out]) Do(ctx context.Context, out *Out) error {
 	if out == nil {
 		return errs.AsError(ctx, fmt.Errorf("output pointer is nil"))
 	}
-
-	u, err := r.buildURL()
+	if r.buildErr != nil {
+		return errs.AsError(ctx, r.buildErr)
+	}
+	req, cancel, err := r.newHTTPRequest(ctx)
 	if err != nil {
 		return r.fail(ctx, out, errs.AsError(ctx, err))
 	}
+	defer cancel()
 
-	if r.cache != nil && r.cacheable {
-		key := r.cacheKeyValue()
-		cached, err := r.cached(ctx, key, u)
+	key := ""
+	if (r.cacheable && r.cache != nil) || r.coalesce {
+		key, err = r.cacheKeyValue(ctx, req)
 		if err != nil {
-			return err
+			return r.fail(ctx, out, errs.AsError(ctx, err))
 		}
-		if cached == nil {
-			return nil
+	}
+	if r.cacheable && r.cache != nil {
+		if r.cacheSWR {
+			if cache, ok := r.cache.(SWRCache); ok {
+				body, ok, err := cache.GetSWR(ctx, key, func(fetchCtx context.Context) ([]byte, error) {
+					return r.loadBytes(fetchCtx, key)
+				})
+				if err != nil {
+					return r.fail(ctx, out, errs.AsError(ctx, err))
+				}
+				if ok {
+					return r.decode(ctx, out, body)
+				}
+			}
 		}
-		// The cached value is the decoded output value.
-		if v, ok := cached.(Out); ok {
-			*out = v
-			return nil
+		body, ok, err := r.cache.Get(ctx, key)
+		if err != nil {
+			return r.fail(ctx, out, errs.AsError(ctx, err))
 		}
-		return r.fail(ctx, out, errs.AsError(ctx, fmt.Errorf("cache type mismatch")))
+		if ok {
+			return r.decode(ctx, out, body)
+		}
 	}
 
-	_, err = r.fetch(ctx, u, out)
-	return err
+	body, err := r.loadBytes(ctx, key)
+	if err != nil {
+		return r.fail(ctx, out, err)
+	}
+	return r.decode(ctx, out, body)
 }
 
-func (r *Request[Out]) cached(ctx context.Context, key, u string) (any, error) {
-	fetch := func(fetchCtx context.Context) (any, error) {
-		var value Out
-		return r.fetch(fetchCtx, u, &value)
+func (r *Request[Out]) loadBytes(ctx context.Context, key string) ([]byte, error) {
+	if !r.coalesce {
+		return r.fetchAndCache(ctx, key)
 	}
-	if r.cacheSWR {
-		if cache, ok := r.cache.(SWRCache); ok {
-			return cache.GetSWR(ctx, key, fetch)
+	group := r.group
+	if group == nil {
+		group = &defaultFlights
+	}
+	ch := group.DoChan(key, func() (any, error) {
+		if r.cache != nil {
+			body, ok, err := r.cache.Get(ctx, key)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				return body, nil
+			}
 		}
-	}
-	return r.cache.Get(ctx, key, func() (any, error) {
-		return fetch(ctx)
+		return r.fetchAndCache(ctx, key)
 	})
+	select {
+	case result := <-ch:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		body, ok := result.Val.([]byte)
+		if !ok {
+			return nil, errs.AsError(ctx, fmt.Errorf("singleflight value type mismatch"))
+		}
+		return cloneBytes(body), nil
+	case <-ctx.Done():
+		return nil, errs.AsError(ctx, ctx.Err())
+	}
 }
 
-func (r *Request[Out]) fetch(ctx context.Context, u string, out *Out) (any, error) {
-	if _, err := r.executeWithRetry(ctx, u, out); err != nil {
-		if err := r.fail(ctx, out, err); err != nil {
+func (r *Request[Out]) fetchAndCache(ctx context.Context, key string) ([]byte, error) {
+	body, err := r.executeBytesWithRetry(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.validate(ctx, body); err != nil {
+		return nil, err
+	}
+	if r.cacheable && r.cache != nil && key != "" {
+		if err := r.cache.Set(ctx, key, body); err != nil {
+			return nil, r.error(ctx, err)
+		}
+	}
+	return body, nil
+}
+
+func (r *Request[Out]) wait(ctx context.Context) (func(), error) {
+	if r.limiter != nil {
+		if err := r.limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
 	}
-	return *out, nil
+	if r.gate == nil {
+		return func() {}, nil
+	}
+	if err := r.gate.Wait(ctx); err != nil {
+		return nil, err
+	}
+	return r.gate.Release, nil
 }
 
-func (r *Request[Out]) executeWithRetry(ctx context.Context, u string, out *Out) (any, error) {
+func (r *Request[Out]) executeBytesWithRetry(ctx context.Context) ([]byte, error) {
 	for attempt := 1; ; attempt++ {
-		value, err := r.execute(ctx, u, out)
-		if err == nil {
-			return value, nil
+		release, err := r.wait(ctx)
+		if err != nil {
+			return nil, r.error(ctx, err)
 		}
-
+		req, cancel, err := r.newHTTPRequest(ctx)
+		if err != nil {
+			release()
+			return nil, r.error(ctx, err)
+		}
+		body, err := r.executeBytes(req)
+		cancel()
+		release()
+		if err == nil {
+			return body, nil
+		}
 		policy, ok := errs.RetryPolicyOf(err)
 		if !ok || !policy.ShouldRetry(attempt) {
 			return nil, err
@@ -486,53 +718,21 @@ func (r *Request[Out]) executeWithRetry(ctx context.Context, u string, out *Out)
 	}
 }
 
-// execute performs one HTTP request and decodes the response. It returns the
-// decoded value so it can be stored in caches that store any values.
-func (r *Request[Out]) execute(ctx context.Context, u string, out *Out) (any, error) {
-	req, err := http.NewRequestWithContext(ctx, r.method, u, bytes.NewReader(r.body))
+func (r *Request[Out]) executeBytes(req *http.Request) ([]byte, error) {
+	rsp, err := r.httpClient().Do(req)
 	if err != nil {
-		return nil, r.error(ctx, err)
-	}
-	for key, values := range r.headers {
-		for _, v := range values {
-			req.Header.Add(key, v)
-		}
-	}
-	if req.Header.Get("Accept") == "" {
-		req.Header.Set("Accept", "application/json")
-	}
-
-	client := r.httpClient()
-	if r.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.timeout)
-		defer cancel()
-		req = req.WithContext(ctx)
-	}
-
-	rsp, err := client.Do(req)
-	if err != nil {
-		return nil, r.error(ctx, err)
+		return nil, r.error(req.Context(), err)
 	}
 	defer rsp.Body.Close()
 
 	body, err := io.ReadAll(rsp.Body)
 	if err != nil {
-		return nil, r.error(ctx, err)
+		return nil, r.error(req.Context(), err)
 	}
-
-	if rsp.StatusCode < 200 || rsp.StatusCode >= 300 {
-		return nil, r.statusError(ctx, rsp.StatusCode, body)
+	if rsp.StatusCode < http.StatusOK || rsp.StatusCode >= http.StatusMultipleChoices {
+		return nil, r.statusError(req.Context(), rsp.StatusCode, body)
 	}
-
-	if len(body) == 0 {
-		return *out, nil
-	}
-
-	if err := json.Unmarshal(body, out); err != nil {
-		return nil, r.error(ctx, err)
-	}
-	return *out, nil
+	return body, nil
 }
 
 func (r *Request[Out]) error(ctx context.Context, err error) *errs.Error {
@@ -563,8 +763,27 @@ func (r *Request[Out]) retryPolicyForStatus(status int) (errs.RetryPolicy, bool)
 	return errs.RetryPolicy{}, false
 }
 
-// fail attempts to populate out from the configured fallback. If no fallback
-// is configured, it returns err unchanged.
+func (r *Request[Out]) validate(ctx context.Context, body []byte) error {
+	if len(body) == 0 {
+		return nil
+	}
+	var out Out
+	if err := json.Unmarshal(body, &out); err != nil {
+		return r.error(ctx, err)
+	}
+	return nil
+}
+
+func (r *Request[Out]) decode(ctx context.Context, out *Out, body []byte) error {
+	if len(body) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return r.fail(ctx, out, errs.AsError(ctx, err))
+	}
+	return nil
+}
+
 func (r *Request[Out]) fail(ctx context.Context, out *Out, err error) error {
 	if len(r.fallback) == 0 {
 		return err
@@ -575,8 +794,7 @@ func (r *Request[Out]) fail(ctx context.Context, out *Out, err error) error {
 	return nil
 }
 
-// TestServer is a convenience helper that returns the URL of an httptest.Server
-// for use in tests. It panics if the server is nil.
+// TestServer returns the URL of an httptest.Server and panics on nil.
 func TestServer(s *httptest.Server) string {
 	if s == nil {
 		panic("hit: nil test server")
