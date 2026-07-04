@@ -34,6 +34,7 @@ import (
 	"go/types"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/omniaura/go-kit/fieldalign"
 	"golang.org/x/tools/go/packages"
@@ -139,6 +140,17 @@ func (r *runner) onePass(patterns []string, pass int) (changed bool, err error) 
 		}
 	})
 
+	// Compute fixes for every file first: identical anonymous struct
+	// types spelled in different files must be deferred together, or
+	// rewriting one spelling breaks assignability with the others.
+	type fileWork struct {
+		fset     *token.FileSet
+		filename string
+		src      []byte
+		isGen    bool
+		fixes    []fieldalign.Fix
+	}
+	var works []fileWork
 	seen := make(map[string]bool) // a file can appear in pkg and pkg.test
 	for _, p := range pkgs {
 		for i, file := range p.Syntax {
@@ -159,20 +171,32 @@ func (r *runner) onePass(patterns []string, pass int) (changed bool, err error) 
 			if len(fixes) == 0 {
 				continue
 			}
-			r.found = true
-			if !r.fix {
-				for i := range fixes {
-					pos := p.Fset.Position(fixes[i].Pos)
-					fmt.Printf("%s: %s\n", pos, fixes[i].Message)
-				}
-				continue
-			}
-			didEdit, err := r.applyFixes(p.Fset, filename, src, fixes, pass, isGen)
-			if err != nil {
-				return changed, err
-			}
-			changed = changed || didEdit
+			works = append(works, fileWork{p.Fset, filename, src, isGen, fixes})
 		}
+	}
+
+	var all []*fieldalign.Fix
+	for i := range works {
+		for j := range works[i].fixes {
+			all = append(all, &works[i].fixes[j])
+		}
+	}
+	fieldalign.DeferIdenticalSkips(all)
+
+	for _, w := range works {
+		r.found = true
+		if !r.fix {
+			for i := range w.fixes {
+				pos := w.fset.Position(w.fixes[i].Pos)
+				fmt.Printf("%s: %s\n", pos, w.fixes[i].Message)
+			}
+			continue
+		}
+		didEdit, err := r.applyFixes(w.fset, w.filename, w.src, w.fixes, pass, w.isGen)
+		if err != nil {
+			return changed, err
+		}
+		changed = changed || didEdit
 	}
 	return changed, nil
 }
@@ -198,7 +222,11 @@ func (r *runner) applyFixes(fset *token.FileSet, filename string, src []byte, fi
 			if pass == 1 && fix.SkipReason != "" {
 				sv.skip = fix.SkipReason
 				r.skipped = append(r.skipped, sv)
-				if fix.SkipReason != "nested in another struct being rewritten; re-run to fix" {
+				// Nested and lockstep skips resolve on a later pass;
+				// only the rest are permanently unfixable.
+				transient := strings.Contains(fix.SkipReason, "re-run") ||
+					strings.Contains(fix.SkipReason, "lockstep")
+				if !transient {
 					r.unfixed++
 					if r.verbose {
 						fmt.Fprintf(os.Stderr, "fieldalign: %s: cannot fix %s: %s\n", pos, structLabel(fix.Name), fix.SkipReason)

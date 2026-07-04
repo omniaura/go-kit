@@ -58,6 +58,8 @@ type Fix struct {
 	Name string
 	// Message is the upstream-compatible diagnostic message.
 	Message string
+	// Type is the struct type; see DeferIdenticalSkips.
+	Type *types.Struct
 
 	OldSize, NewSize         int64
 	OldPtrBytes, NewPtrBytes int64
@@ -81,6 +83,7 @@ func (f *Fix) SavedBytes() int64 { return f.OldSize - f.NewSize }
 
 func run(pass *analysis.Pass) (any, error) {
 	unkeyed := unkeyedStructs(pass.TypesInfo, pass.Files)
+	var all []*Fix
 	for _, file := range pass.Files {
 		tokFile := pass.Fset.File(file.FileStart)
 		if tokFile == nil {
@@ -92,24 +95,27 @@ func run(pass *analysis.Pass) (any, error) {
 		}
 		fixes := FileFixes(pass.Fset, file, src, pass.TypesInfo, pass.TypesSizes, unkeyed)
 		for i := range fixes {
-			fix := &fixes[i]
-			diag := analysis.Diagnostic{
-				Pos:     fix.Pos,
-				End:     fix.Pos + token.Pos(len("struct")),
-				Message: fix.Message,
-			}
-			if fix.Fixable() {
-				diag.SuggestedFixes = []analysis.SuggestedFix{{
-					Message: "Rearrange fields",
-					TextEdits: []analysis.TextEdit{{
-						Pos:     fix.EditPos,
-						End:     fix.EditEnd,
-						NewText: fix.NewText,
-					}},
-				}}
-			}
-			pass.Report(diag)
+			all = append(all, &fixes[i])
 		}
+	}
+	DeferIdenticalSkips(all)
+	for _, fix := range all {
+		diag := analysis.Diagnostic{
+			Pos:     fix.Pos,
+			End:     fix.Pos + token.Pos(len("struct")),
+			Message: fix.Message,
+		}
+		if fix.Fixable() {
+			diag.SuggestedFixes = []analysis.SuggestedFix{{
+				Message: "Rearrange fields",
+				TextEdits: []analysis.TextEdit{{
+					Pos:     fix.EditPos,
+					End:     fix.EditEnd,
+					NewText: fix.NewText,
+				}},
+			}}
+		}
+		pass.Report(diag)
 	}
 	return nil, nil
 }
@@ -181,6 +187,38 @@ func FileFixes(fset *token.FileSet, file *ast.File, src []byte, info *types.Info
 // silently reassign field values, so they are never rewritten.
 func UnkeyedStructs(info *types.Info, files []*ast.File) map[*types.Struct]bool {
 	return unkeyedStructs(info, files)
+}
+
+// DeferIdenticalSkips clears the edit on every fixable fix whose struct
+// type is identical (ignoring tags) to that of a fix that cannot be
+// applied in the same batch. Distinct spellings of one anonymous struct
+// type are identical types to the compiler; rewriting one spelling while
+// another is skipped (nested in a larger rewrite, unusual layout, ...)
+// would break assignability between them. Deferred fixes usually become
+// applicable on a later pass. Call this across ALL fixes that will be
+// applied together — every file, every package.
+func DeferIdenticalSkips(fixes []*Fix) {
+	var skipped []*types.Struct
+	for _, f := range fixes {
+		if !f.Fixable() && f.Type != nil {
+			skipped = append(skipped, f.Type)
+		}
+	}
+	if len(skipped) == 0 {
+		return
+	}
+	for _, f := range fixes {
+		if !f.Fixable() {
+			continue
+		}
+		for _, s := range skipped {
+			if types.IdenticalIgnoreTags(f.Type, s) {
+				f.NewText = nil
+				f.SkipReason = "kept in lockstep with an identical struct type that cannot be rewritten in this pass"
+				break
+			}
+		}
+	}
 }
 
 // constructedUnkeyed reports whether typ is (or is structurally identical
@@ -300,6 +338,7 @@ func analyze(node *ast.StructType, typ *types.Struct, s *gcSizes) (*Fix, bool) {
 	return &Fix{
 		Pos:         node.Pos(),
 		Message:     message,
+		Type:        typ,
 		OldSize:     curSize,
 		NewSize:     optSize,
 		OldPtrBytes: curPtrs,
