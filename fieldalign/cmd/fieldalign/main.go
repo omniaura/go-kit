@@ -17,9 +17,12 @@
 //	-tests          include test files (default true)
 //	-summary        print a memory-savings summary (default true with -fix)
 //	-max-passes N   fixpoint iterations for nested structs (default 5)
+//	-v              per-struct detail for structs left unfixed
 //
-// Exit status is 1 if any suboptimal struct was found (or, with -fix,
-// left unfixable), 0 otherwise.
+// Without -fix, exit status is 1 if any suboptimal struct was found.
+// With -fix (pipeline mode) the exit status is 0 even when some structs
+// were skipped as unfixable — those are advisory (the summary counts
+// them, -v lists them) and still surface through the lint analyzer.
 package main
 
 import (
@@ -43,6 +46,7 @@ func main() {
 		tests     = flag.Bool("tests", true, "include test files")
 		summary   = flag.Bool("summary", true, "print a memory-savings summary after -fix")
 		maxPasses = flag.Int("max-passes", 5, "fixpoint iterations for nested structs")
+		verbose   = flag.Bool("v", false, "per-struct detail for structs left unfixed")
 	)
 	flag.Parse()
 	patterns := flag.Args()
@@ -55,6 +59,7 @@ func main() {
 		generated: *generated,
 		tests:     *tests,
 		maxPasses: *maxPasses,
+		verbose:   *verbose,
 	}
 	if err := r.run(patterns); err != nil {
 		fmt.Fprintln(os.Stderr, "fieldalign:", err)
@@ -63,13 +68,8 @@ func main() {
 	if *fix && *summary {
 		r.printSummary()
 	}
-	if r.found {
-		if !*fix {
-			os.Exit(1)
-		}
-		if r.unfixed > 0 {
-			os.Exit(1)
-		}
+	if r.found && !*fix {
+		os.Exit(1)
 	}
 }
 
@@ -89,6 +89,7 @@ type runner struct {
 	generated bool
 	tests     bool
 	maxPasses int
+	verbose   bool
 
 	found   bool
 	unfixed int
@@ -199,7 +200,9 @@ func (r *runner) applyFixes(fset *token.FileSet, filename string, src []byte, fi
 				r.skipped = append(r.skipped, sv)
 				if fix.SkipReason != "nested in another struct being rewritten; re-run to fix" {
 					r.unfixed++
-					fmt.Fprintf(os.Stderr, "fieldalign: %s: cannot fix %s: %s\n", pos, structLabel(fix.Name), fix.SkipReason)
+					if r.verbose {
+						fmt.Fprintf(os.Stderr, "fieldalign: %s: cannot fix %s: %s\n", pos, structLabel(fix.Name), fix.SkipReason)
+					}
 				}
 			}
 			continue
@@ -263,7 +266,7 @@ func (r *runner) printSummary() {
 			fmt.Sprintf("%s:%d", s.pos.Filename, s.pos.Line), structLabel(s.name), s.oldSize, s.newSize, s.oldSize-s.newSize)
 	}
 	if r.unfixed > 0 {
-		fmt.Printf("  %d structs left unfixed (see stderr; unkeyed literals or unusual layouts)\n", r.unfixed)
+		fmt.Printf("  %d structs left as-is (unkeyed literals or unusual layouts; run with -v for detail)\n", r.unfixed)
 	}
 }
 

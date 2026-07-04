@@ -170,6 +170,37 @@ var v = T{true, "x", false}
 	}
 }
 
+func TestIdenticalAnonymousStructBlocked(t *testing.T) {
+	// Two spellings of the same anonymous struct type are distinct
+	// *types.Struct values. If one is constructed with an unkeyed
+	// literal, the OTHER must not be reordered either, or the two types
+	// stop being identical and assignments between them break.
+	src := `package p
+
+var sink struct {
+	A bool
+	B string
+	C bool
+}
+
+func f() {
+	v := struct {
+		A bool
+		B string
+		C bool
+	}{true, "x", false}
+	sink = v
+}
+`
+	c := check(t, src)
+	for i := range c.fixes {
+		if c.fixes[i].Fixable() {
+			t.Errorf("fix offered for struct at %v despite identical type having unkeyed literals",
+				c.fset.Position(c.fixes[i].Pos))
+		}
+	}
+}
+
 func TestIgnoreDirective(t *testing.T) {
 	src := `package p
 

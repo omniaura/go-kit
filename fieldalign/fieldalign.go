@@ -151,7 +151,7 @@ func FileFixes(fset *token.FileSet, file *ast.File, src []byte, info *types.Info
 		}
 		fix.Name = names[node]
 
-		if unkeyed[typ] {
+		if constructedUnkeyed(typ, unkeyed) {
 			fix.SkipReason = "constructed with unkeyed composite literals; convert them to keyed literals first"
 		} else {
 			computeEdit(fset, node, src, fix)
@@ -181,6 +181,23 @@ func FileFixes(fset *token.FileSet, file *ast.File, src []byte, info *types.Info
 // silently reassign field values, so they are never rewritten.
 func UnkeyedStructs(info *types.Info, files []*ast.File) map[*types.Struct]bool {
 	return unkeyedStructs(info, files)
+}
+
+// constructedUnkeyed reports whether typ is (or is structurally identical
+// to) a struct constructed with an unkeyed composite literal. Identity
+// matters beyond pointer equality: two spellings of the same anonymous
+// struct type are distinct *types.Struct values, yet reordering one and
+// not the other breaks assignability between them.
+func constructedUnkeyed(typ *types.Struct, unkeyed map[*types.Struct]bool) bool {
+	if unkeyed[typ] {
+		return true
+	}
+	for u := range unkeyed {
+		if types.IdenticalIgnoreTags(typ, u) {
+			return true
+		}
+	}
+	return false
 }
 
 func unkeyedStructs(info *types.Info, files []*ast.File) map[*types.Struct]bool {
