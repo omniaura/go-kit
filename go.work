@@ -15,5 +15,6 @@ use (
 	./shutdown
 	./slicer
 	./sqlconv
+	./strutils
 	./tasker
 )
