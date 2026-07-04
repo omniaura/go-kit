@@ -207,6 +207,40 @@ func TestSum(t *testing.T) {
 	mustContain(t, out["a/a_test.go"], "Sum(SumParams{A1: 1, A2: 2, A3: 3, A4: 4, A5: 5})")
 }
 
+func TestExternalTestPackageCallerGetsQualifier(t *testing.T) {
+	// package a_test is a DIFFERENT package: the params struct must be
+	// written as a.SumParams there, not bare SumParams.
+	dir, pkgs := loadModule(t, map[string]string{
+		"a/a.go": `package a
+
+type M struct{}
+
+func (M) Sum(a1, a2, a3, a4, a5 int) int { return a1 + a2 + a3 + a4 + a5 }
+`,
+		"a/a_ext_test.go": `package a_test
+
+import (
+	"testing"
+
+	"example.com/m/a"
+)
+
+func TestSum(t *testing.T) {
+	var m a.M
+	if m.Sum(1, 2, 3, 4, 5) != 15 {
+		t.Fatal("nope")
+	}
+}
+`,
+	})
+	res := plan(t, pkgs)
+	if len(res.Rewritten) != 1 {
+		t.Fatalf("rewritten=%d skipped=%+v", len(res.Rewritten), res.Skipped)
+	}
+	out := applyAll(t, dir, res)
+	mustContain(t, out["a/a_ext_test.go"], "m.Sum(a.SumParams{A1: 1, A2: 2, A3: 3, A4: 4, A5: 5})")
+}
+
 func TestNestedStructifiedCalls(t *testing.T) {
 	// outer's params are used as arguments to inner — the ident rewrites
 	// happen inside spans that the caller rewrite wraps with insertions.

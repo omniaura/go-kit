@@ -766,8 +766,11 @@ func qualifierFor(ref refInfo, target *packages.Package) (string, bool) {
 }
 
 func samePath(a, b *packages.Package) bool {
-	// Test variants share the path but not the *types.Package.
-	return strings.TrimSuffix(a.PkgPath, "_test") == b.PkgPath
+	// The in-package test variant ("p [p.test]") shares PkgPath with the
+	// primary package but not its *types.Package. The EXTERNAL test
+	// package ("p_test") is a different package — it needs a qualifier,
+	// so it must NOT match here (it falls through to the import scan).
+	return a.PkgPath == b.PkgPath
 }
 
 var initialisms = map[string]string{
