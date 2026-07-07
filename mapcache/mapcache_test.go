@@ -250,6 +250,100 @@ func TestMapCache_At(t *testing.T) {
 	}
 }
 
+func TestMapCache_Set(t *testing.T) {
+	mc, err := mapcache.New[string, int]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := mc.Set("key", 1)
+	if first.V != 1 {
+		t.Fatalf("expected set item value 1, got %d", first.V)
+	}
+
+	item, ok := mc.At("key")
+	if !ok {
+		t.Fatal("expected cached item")
+	}
+	if item.V != 1 {
+		t.Fatalf("expected cached value 1, got %d", item.V)
+	}
+	if !item.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("expected At to expose set item timestamp")
+	}
+
+	time.Sleep(time.Millisecond)
+	second := mc.Set("key", 2)
+	if second.V != 2 {
+		t.Fatalf("expected set item value 2, got %d", second.V)
+	}
+	if !second.UpdatedAt.After(first.UpdatedAt) {
+		t.Fatalf("expected overwrite to refresh timestamp")
+	}
+
+	item, ok = mc.At("key")
+	if !ok {
+		t.Fatal("expected overwritten cached item")
+	}
+	if item.V != 2 {
+		t.Fatalf("expected overwritten cached value 2, got %d", item.V)
+	}
+}
+
+func TestMapCache_Delete(t *testing.T) {
+	mc, err := mapcache.New[string, int]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mc.Set("key", 1)
+	mc.Delete("key")
+
+	if _, ok := mc.At("key"); ok {
+		t.Fatal("expected deleted key to be missing")
+	}
+
+	calls := 0
+	val, err := mc.Get("key", func() (int, error) {
+		calls++
+		return 2, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val != 2 {
+		t.Fatalf("expected updater value 2, got %d", val)
+	}
+	if calls != 1 {
+		t.Fatalf("expected updater to run once, got %d", calls)
+	}
+}
+
+func TestMapCache_Clear(t *testing.T) {
+	mc, err := mapcache.New[string, int]()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mc.Set("one", 1)
+	mc.Set("two", 2)
+	mc.Clear()
+
+	for _, key := range []string{"one", "two"} {
+		if _, ok := mc.At(key); ok {
+			t.Fatalf("expected key %q to be missing", key)
+		}
+	}
+
+	count := 0
+	for range mc.All() {
+		count++
+	}
+	if count != 0 {
+		t.Fatalf("expected empty cache after clear, got %d items", count)
+	}
+}
+
 func TestMapCache_GetSWRReturnsStaleAndRefreshes(t *testing.T) {
 	mc, err := mapcache.New[string, int](mapcache.WithTTL(time.Millisecond))
 	if err != nil {

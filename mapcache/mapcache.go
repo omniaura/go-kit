@@ -289,6 +289,20 @@ func (mc *MapCache[K, V]) Set(key K, value V) Item[V] {
 	return mc.set(key, value, time.Now())
 }
 
+// Delete removes key from the cache.
+func (mc *MapCache[K, V]) Delete(key K) {
+	mc.mu.Lock()
+	delete(mc.m, key)
+	mc.mu.Unlock()
+}
+
+// Clear removes all keys from the cache.
+func (mc *MapCache[K, V]) Clear() {
+	mc.mu.Lock()
+	clear(mc.m)
+	mc.mu.Unlock()
+}
+
 func (mc *MapCache[K, V]) refresh(
 	ctx context.Context,
 	key K,
