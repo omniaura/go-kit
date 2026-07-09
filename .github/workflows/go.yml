@@ -5,9 +5,21 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Runner architecture for benchmarks
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - amd64
+          - arm64
 
 jobs:
   test:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
       GOTOOLCHAIN: local
@@ -29,3 +41,123 @@ jobs:
 
       - name: Run workspace tests
         run: ./scripts/test-all.sh
+
+  benchmark-amd64:
+    name: Benchmarks (linux/amd64)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.arch == 'all' || inputs.arch == 'amd64') }}
+    runs-on: ubuntu-latest
+    env:
+      ARCH: amd64
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up latest stable Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Run string builder benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          {
+            printf '# stringbuilderlint benchmarks (%s/%s)\n' "$(go env GOOS)" "$(go env GOARCH)"
+            go version
+            printf '\n'
+            cd stringbuilderlint
+            go test -run '^$' -bench 'Benchmark(Concat|BuilderConcat|Sprintf|BuilderSprintf)' -benchmem -count 5
+          } | tee "benchmark-results/stringbuilderlint-${ARCH}.txt"
+
+      - name: Run lookup table benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          {
+            printf '# lookuptablelint benchmarks (%s/%s)\n' "$(go env GOOS)" "$(go env GOARCH)"
+            go version
+            printf '\n'
+            cd lookuptablelint
+            go test -run '^$' -bench 'Benchmark(MapLookup|SwitchLookup)' -benchmem -count 5
+          } | tee "benchmark-results/lookuptablelint-${ARCH}.txt"
+
+      - name: Write benchmark summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '## Benchmarks (linux/%s)\n\n' "${ARCH}"
+            printf '```text\n'
+            cat benchmark-results/*.txt
+            printf '```\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-results-amd64
+          path: benchmark-results/*.txt
+
+  benchmark-arm64:
+    name: Benchmarks (linux/arm64)
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.arch == 'all' || inputs.arch == 'arm64') }}
+    runs-on: ubuntu-24.04-arm
+    env:
+      ARCH: arm64
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up latest stable Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Run string builder benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          {
+            printf '# stringbuilderlint benchmarks (%s/%s)\n' "$(go env GOOS)" "$(go env GOARCH)"
+            go version
+            printf '\n'
+            cd stringbuilderlint
+            go test -run '^$' -bench 'Benchmark(Concat|BuilderConcat|Sprintf|BuilderSprintf)' -benchmem -count 5
+          } | tee "benchmark-results/stringbuilderlint-${ARCH}.txt"
+
+      - name: Run lookup table benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          {
+            printf '# lookuptablelint benchmarks (%s/%s)\n' "$(go env GOOS)" "$(go env GOARCH)"
+            go version
+            printf '\n'
+            cd lookuptablelint
+            go test -run '^$' -bench 'Benchmark(MapLookup|SwitchLookup)' -benchmem -count 5
+          } | tee "benchmark-results/lookuptablelint-${ARCH}.txt"
+
+      - name: Write benchmark summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '## Benchmarks (linux/%s)\n\n' "${ARCH}"
+            printf '```text\n'
+            cat benchmark-results/*.txt
+            printf '```\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-results-arm64
+          path: benchmark-results/*.txt

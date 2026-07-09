@@ -1,0 +1,63 @@
+package sprintf
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+type payload struct {
+	Name string
+}
+
+func primitive(name string, count int, enabled bool) string {
+	return func() string {
+		builderPart0 := name
+		builderPart2 := strconv.FormatInt(int64(count), 10)
+		builderPart4 := strconv.FormatBool(enabled)
+		var sb strings.Builder
+		sb.Grow(len(builderPart0) + 1 + len(builderPart2) + 1 + len(builderPart4))
+		sb.WriteString(builderPart0)
+		sb.WriteString("/")
+		sb.WriteString(builderPart2)
+		sb.WriteString("/")
+		sb.WriteString(builderPart4)
+		return sb.String()
+	}() // want "fmt.Sprintf with primitive arguments should use strings.Builder and strconv"
+}
+
+func floatPrimitive(name string, ratio float64) string {
+	return func() string {
+		builderPart0 := name
+		builderPart2 := strconv.FormatFloat(float64(ratio), 'f', 2, 64)
+		var sb strings.Builder
+		sb.Grow(len(builderPart0) + 1 + len(builderPart2))
+		sb.WriteString(builderPart0)
+		sb.WriteString("=")
+		sb.WriteString(builderPart2)
+		return sb.String()
+	}() // want "fmt.Sprintf with primitive arguments should use strings.Builder and strconv"
+}
+
+func onePrimitive(count int) string {
+	return func() string {
+		builderPart1 := strconv.FormatInt(int64(count), 10)
+		var sb strings.Builder
+		sb.Grow(3 + len(builderPart1))
+		sb.WriteString("id=")
+		sb.WriteString(builderPart1)
+		return sb.String()
+	}() // want "fmt.Sprintf with primitive arguments should use strings.Builder and strconv"
+}
+
+func barePrimitive(count int) string {
+	return fmt.Sprintf("%d", count)
+}
+
+func unsupportedStruct(value payload) string {
+	return fmt.Sprintf("%v", value)
+}
+
+func unsupportedWidth(name string) string {
+	return fmt.Sprintf("%10s", name)
+}
