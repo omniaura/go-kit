@@ -22,8 +22,17 @@ func ignoredUnmarshal(data []byte) {
 	_ = json.Unmarshal(data, &value) // want "discarded JSON encode/decode error should be handled or logged"
 }
 
+func nakedUnmarshal(data []byte) {
+	var value map[string]any
+	json.Unmarshal(data, &value) // want "discarded JSON encode/decode error should be handled or logged"
+}
+
 func ignoredMarshal(value map[string]any) {
 	_, _ = json.Marshal(value) // want "discarded JSON encode/decode error should be handled or logged"
+}
+
+func nakedMarshal(value map[string]any) {
+	json.Marshal(value) // want "discarded JSON encode/decode error should be handled or logged"
 }
 
 func ignoredDecode(raw string) {
