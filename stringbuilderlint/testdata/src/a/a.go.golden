@@ -9,33 +9,87 @@ func twoParts(a, b string) string {
 }
 
 func threeParts(a, b, c string) string {
-	return func() string {
-		builderPart0 := a
-		builderPart2 := b
-		builderPart4 := c
-		var sb strings.Builder
-		sb.Grow(len(builderPart0) + 1 + len(builderPart2) + 1 + len(builderPart4))
-		sb.WriteString(builderPart0)
-		sb.WriteString(":")
-		sb.WriteString(builderPart2)
-		sb.WriteString(":")
-		sb.WriteString(builderPart4)
-		return sb.String()
-	}() // want "string concatenation with 5 parts should use strings.Builder"
+	return a + ":" + b + ":" + c
 }
 
 func nested(a, b, c string) string {
+	return (a + b) + c
+}
+
+func fiveDynamic(a, b, c, d, e string) string {
+	return a + ":" + b + ":" + c + ":" + d + ":" + e
+}
+
+func thirtyTwoDynamic(a string, b string, c string, d string, e string, f string, g string, h string, i string, j string, k string, l string, m string, n string, o string, p string, q string, r string, s string, t string, u string, v string, w string, x string, y string, z string, aa string, ab string, ac string, ad string, ae string, af string) string {
 	return func() string {
 		builderPart0 := a
 		builderPart1 := b
 		builderPart2 := c
+		builderPart3 := d
+		builderPart4 := e
+		builderPart5 := f
+		builderPart6 := g
+		builderPart7 := h
+		builderPart8 := i
+		builderPart9 := j
+		builderPart10 := k
+		builderPart11 := l
+		builderPart12 := m
+		builderPart13 := n
+		builderPart14 := o
+		builderPart15 := p
+		builderPart16 := q
+		builderPart17 := r
+		builderPart18 := s
+		builderPart19 := t
+		builderPart20 := u
+		builderPart21 := v
+		builderPart22 := w
+		builderPart23 := x
+		builderPart24 := y
+		builderPart25 := z
+		builderPart26 := aa
+		builderPart27 := ab
+		builderPart28 := ac
+		builderPart29 := ad
+		builderPart30 := ae
+		builderPart31 := af
 		var sb strings.Builder
-		sb.Grow(len(builderPart0) + len(builderPart1) + len(builderPart2))
+		sb.Grow(len(builderPart0) + len(builderPart1) + len(builderPart2) + len(builderPart3) + len(builderPart4) + len(builderPart5) + len(builderPart6) + len(builderPart7) + len(builderPart8) + len(builderPart9) + len(builderPart10) + len(builderPart11) + len(builderPart12) + len(builderPart13) + len(builderPart14) + len(builderPart15) + len(builderPart16) + len(builderPart17) + len(builderPart18) + len(builderPart19) + len(builderPart20) + len(builderPart21) + len(builderPart22) + len(builderPart23) + len(builderPart24) + len(builderPart25) + len(builderPart26) + len(builderPart27) + len(builderPart28) + len(builderPart29) + len(builderPart30) + len(builderPart31))
 		sb.WriteString(builderPart0)
 		sb.WriteString(builderPart1)
 		sb.WriteString(builderPart2)
+		sb.WriteString(builderPart3)
+		sb.WriteString(builderPart4)
+		sb.WriteString(builderPart5)
+		sb.WriteString(builderPart6)
+		sb.WriteString(builderPart7)
+		sb.WriteString(builderPart8)
+		sb.WriteString(builderPart9)
+		sb.WriteString(builderPart10)
+		sb.WriteString(builderPart11)
+		sb.WriteString(builderPart12)
+		sb.WriteString(builderPart13)
+		sb.WriteString(builderPart14)
+		sb.WriteString(builderPart15)
+		sb.WriteString(builderPart16)
+		sb.WriteString(builderPart17)
+		sb.WriteString(builderPart18)
+		sb.WriteString(builderPart19)
+		sb.WriteString(builderPart20)
+		sb.WriteString(builderPart21)
+		sb.WriteString(builderPart22)
+		sb.WriteString(builderPart23)
+		sb.WriteString(builderPart24)
+		sb.WriteString(builderPart25)
+		sb.WriteString(builderPart26)
+		sb.WriteString(builderPart27)
+		sb.WriteString(builderPart28)
+		sb.WriteString(builderPart29)
+		sb.WriteString(builderPart30)
+		sb.WriteString(builderPart31)
 		return sb.String()
-	}() // want "string concatenation with 3 parts should use strings.Builder"
+	}() // want "string concatenation with 32 dynamic parts should use strings.Builder"
 }
 
 func constantOnly() string {

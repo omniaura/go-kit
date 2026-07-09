@@ -16,9 +16,11 @@ import (
 )
 
 const (
-	analyzerName = "stringbuilderlint"
-	stringsPath  = "strings"
-	strconvPath  = "strconv"
+	analyzerName           = "stringbuilderlint"
+	minConcatDynamicParts  = 32
+	minSprintfBuilderParts = 2
+	stringsPath            = "strings"
+	strconvPath            = "strconv"
 )
 
 // Analyzer reports string concatenation and primitive fmt.Sprintf calls that
@@ -77,7 +79,8 @@ func (r reporter) checkConcat(expr *ast.BinaryExpr) {
 		return
 	}
 	parts := stringConcatParts(r.pass, expr)
-	if len(parts) <= 2 {
+	dynamicParts := countDynamicStringParts(r.pass, parts)
+	if dynamicParts < minConcatDynamicParts {
 		return
 	}
 	if r.ignores.ignored(expr.Pos()) {
@@ -105,7 +108,7 @@ func (r reporter) checkConcat(expr *ast.BinaryExpr) {
 	diag := analysis.Diagnostic{
 		Pos:     expr.Pos(),
 		End:     expr.End(),
-		Message: fmt.Sprintf("string concatenation with %d parts should use strings.Builder", len(parts)),
+		Message: fmt.Sprintf("string concatenation with %d dynamic parts should use strings.Builder", dynamicParts),
 	}
 	if ok {
 		diag.SuggestedFixes = []analysis.SuggestedFix{fix}
@@ -119,6 +122,9 @@ func (r reporter) checkSprintf(call *ast.CallExpr) {
 	}
 	pieces, ok := r.sprintfPieces(call)
 	if !ok {
+		return
+	}
+	if len(pieces) < minSprintfBuilderParts {
 		return
 	}
 	fix, ok := r.builderFix(call.Pos(), call.End(), pieces, "Replace with strings.Builder")
@@ -152,6 +158,17 @@ func stringLiteralPiece(pass *analysis.Pass, expr ast.Expr) (builderPiece, bool)
 		literal:    strconv.Quote(value),
 		literalLen: len(value),
 	}, true
+}
+
+func countDynamicStringParts(pass *analysis.Pass, parts []ast.Expr) int {
+	count := 0
+	for _, part := range parts {
+		if _, ok := stringLiteralPiece(pass, part); ok {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 type conversionKind int
