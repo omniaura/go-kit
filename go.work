@@ -21,5 +21,4 @@ use (
 	./structify
 	./strutils
 	./tasker
-	./uncheckederrlint
 )
