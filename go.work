@@ -9,6 +9,7 @@ use (
 	./errs
 	./fieldalign
 	./itemcache
+	./lookuptablelint
 	./mapcache
 	./net
 	./pgconv
