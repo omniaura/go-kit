@@ -40,8 +40,12 @@ func TestWords(t *testing.T) {
 		{"JSONData", []string{"JSON", "Data"}},
 		{"userID", []string{"user", "ID"}},
 		{"AAAbbb", []string{"AA", "Abbb"}},
-		{"numbers2and55with000", []string{"numbers", "2", "and", "55", "with", "000"}},
-		{"AB1AB2AB3", []string{"AB", "1", "AB", "2", "AB", "3"}},
+		{"numbers2and55with000", []string{"numbers2and55with000"}},
+		{"AB1AB2AB3", []string{"AB1AB2AB3"}},
+		{"Q3Report", []string{"Q3", "Report"}},
+		{"userID2 v2.1", []string{"user", "ID2", "v2", "1"}},
+		{"test2Case", []string{"test2", "Case"}},
+		{"2nd-edition", []string{"2nd", "edition"}},
 		{"don't stop", []string{"don't", "stop"}},
 		{"über straße", []string{"über", "straße"}},
 		{"ÜberStraße", []string{"Über", "Straße"}},
@@ -96,16 +100,14 @@ func TestToSnake(t *testing.T) {
 		{"ManyManyWords", "many_many_words"},
 		{"manyManyWords", "many_many_words"},
 		{"AnyKind of_string", "any_kind_of_string"},
-		{"numbers2and55with000", "numbers_2_and_55_with_000"},
+		{"numbers2and55with000", "numbers2and55with000"},
 		{"JSONData", "json_data"},
 		{"userID", "user_id"},
 		{"AAAbbb", "aa_abbb"},
-		{"1A2", "1_a_2"},
-		{"A1B", "a_1_b"},
-		{"A1A2A3", "a_1_a_2_a_3"},
-		{"A1 A2 A3", "a_1_a_2_a_3"},
-		{"AB1AB2AB3", "ab_1_ab_2_ab_3"},
-		{"AB1 AB2 AB3", "ab_1_ab_2_ab_3"},
+		{"A1 A2 A3", "a1_a2_a3"},
+		{"AB1 AB2 AB3", "ab1_ab2_ab3"},
+		{"Q3Report", "q3_report"},
+		{"userID2", "user_id2"},
 		{"some string", "some_string"},
 		{" some string", "some_string"},
 		{"test-case", "test_case"},
@@ -147,7 +149,7 @@ func TestToDelimited(t *testing.T) {
 		{"", ""},
 		{"ManyManyWords", "many@many@words"},
 		{"AnyKind of_string", "any@kind@of@string"},
-		{"numbers2and55with000", "numbers@2@and@55@with@000"},
+		{"numbers2and55with000", "numbers2and55with000"},
 		{"JSONData", "json@data"},
 		{"userID", "user@id"},
 		{"AAAbbb", "aa@abbb"},
@@ -178,7 +180,8 @@ func TestToCamel(t *testing.T) {
 		{"many_many_words", "ManyManyWords"},
 		{"AnyKind of_string", "AnyKindOfString"},
 		{"odd-fix", "OddFix"},
-		{"numbers2And55with000", "Numbers2And55With000"},
+		{"numbers2And55with000", "Numbers2And55with000"},
+		{"q3_report_v2", "Q3ReportV2"},
 		{"ID", "Id"},
 		{"CONSTANT_CASE", "ConstantCase"},
 		{"über straße", "ÜberStraße"},
@@ -203,7 +206,8 @@ func TestToTitle(t *testing.T) {
 	check(t, "ToTitle", caseconv.ToTitle[string], caseconv.ToTitle[[]byte], []pair{
 		{"", ""},
 		{"integration-channel-partner-compensation-benchmarks", "Integration Channel Partner Compensation Benchmarks"},
-		{"quarterly_report_v2", "Quarterly Report V 2"},
+		{"quarterly_report_v2", "Quarterly Report V2"},
+		{"Q3-report", "Q3 Report"},
 		{"AnyKind of_string", "Any Kind Of String"},
 		{"API-reference", "API Reference"},
 		{"already Title Cased", "Already Title Cased"},
@@ -348,13 +352,13 @@ func ExampleToTitle() {
 	fmt.Println(caseconv.ToTitle("API-reference.v2"))
 	// Output:
 	// Integration Channel Partner Compensation Benchmarks
-	// API Reference V 2
+	// API Reference V2
 }
 
 func ExampleWords() {
 	fmt.Printf("%q\n", caseconv.Words("JSONData v2.1"))
 	// Output:
-	// ["JSON" "Data" "v" "2" "1"]
+	// ["JSON" "Data" "v2" "1"]
 }
 
 func ExampleCase_Convert() {

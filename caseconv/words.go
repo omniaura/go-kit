@@ -73,11 +73,12 @@ func decodeRune[T Text](s T, i int) (rune, int) {
 }
 
 // Words splits s into its words. Boundaries are placed at separators, at
-// lower→upper transitions, at letter↔digit transitions and after an acronym
-// when it is followed by a capitalised word. Separator runs are dropped, so
-// the result never contains an empty word.
+// lower→upper transitions and after an acronym when it is followed by a
+// capitalised word. Digits belong to the word they follow and never create a
+// boundary. Separator runs are dropped, so the result never contains an empty
+// word.
 //
-//	Words("JSONData v2.1") // ["JSON", "Data", "v", "2", "1"]
+//	Words("JSONData v2.1") // ["JSON", "Data", "v2", "1"]
 func Words[T Text](s T) []T {
 	var out []T
 	for word := range Split(s) {
@@ -112,7 +113,12 @@ func Split[T Text](s T) iter.Seq[T] {
 				}
 				start = i
 			}
-			prev = cur
+			if cur != classDigit || start == i {
+				// Digits never begin or end a word on their own and are
+				// transparent to the case rules, so "Q3Report" splits into
+				// "Q3" and "Report" and "v2" stays one word.
+				prev = cur
+			}
 			i += size
 		}
 		if start >= 0 {
@@ -123,17 +129,11 @@ func Split[T Text](s T) iter.Seq[T] {
 
 // boundary reports whether a word ends between two adjacent runes of classes
 // prev and cur, ignoring the acronym rule (which needs one more rune of
-// lookahead and is handled by the caller).
+// lookahead and is handled by the caller). prev is the class of the last
+// non-digit rune of the current word, or classDigit when the word is digits
+// only.
 func boundary(prev, cur runeClass) bool {
-	switch {
-	case prev == classLower && cur == classUpper:
-		return true
-	case prev == classDigit && cur != classDigit:
-		return true
-	case cur == classDigit && prev != classDigit:
-		return true
-	}
-	return false
+	return prev == classLower && cur == classUpper
 }
 
 // startsLowerAfter reports whether the rune at s[i] is lower-case. It is the

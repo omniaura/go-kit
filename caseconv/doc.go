@@ -9,8 +9,9 @@
 //
 // Conversion is a two-step process. [Words] first splits the input into
 // words at separators (any rune that is not a letter, digit or apostrophe),
-// at lower→upper transitions, at letter↔digit transitions and at the end of
-// an acronym ("JSONData" → "JSON", "Data"). The converters then rewrite the
+// at lower→upper transitions and at the end of an acronym ("JSONData" →
+// "JSON", "Data"); digits stay attached to the letters before them ("Q3Report"
+// → "Q3", "Report"). The converters then rewrite the
 // case of each word and join them with the delimiter of the target
 // convention. Letters outside ASCII are handled through the unicode tables,
 // so "über straße" and "ÜberStraße" both split into the same two words.
