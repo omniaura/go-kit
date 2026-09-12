@@ -4,6 +4,7 @@ toolchain go1.26.1
 
 use (
 	./batcher
+	./caseconv
 	./cmd/monotag
 	./convert
 	./errs
