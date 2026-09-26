@@ -3,6 +3,8 @@ package errs
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -126,14 +128,14 @@ func (e *Error) recordFor(severity Severity) Record {
 	return Record{
 		Time:       time.Now(),
 		Upstream:   e.upstream,
-		Fields:     e.fields,
-		Params:     e.params,
+		Fields:     maps.Clone(e.fields),
+		Params:     maps.Clone(e.params),
 		Ref:        e.Ref(),
 		Code:       e.code,
 		Message:    e.Message(),
 		Source:     e.source,
 		Action:     e.action,
-		Attrs:      e.logStack,
+		Attrs:      slices.Clone(e.logStack),
 		RetryAfter: e.retryAfter,
 		Status:     int(e.Status),
 		Severity:   severity,

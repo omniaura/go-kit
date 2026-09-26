@@ -1,6 +1,9 @@
 package errs
 
-import "time"
+import (
+	"maps"
+	"time"
+)
 
 // Public is the client view of an error: everything in it may be shown to the
 // person who made the request. Encoders render it; non-HTTP transports put it
@@ -20,8 +23,10 @@ type Public struct {
 // Public returns the client view of e.
 func (e *Error) Public() Public {
 	return Public{
-		Fields:       e.fields,
-		Params:       e.params,
+		// Copies: sinks read Records on other goroutines while a handler may
+		// still be adding Fields/Params to the same *Error.
+		Fields:       maps.Clone(e.fields),
+		Params:       maps.Clone(e.params),
 		Message:      e.Message(),
 		Code:         e.code,
 		Ref:          e.Ref(),

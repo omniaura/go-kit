@@ -2,6 +2,7 @@ package errs_test
 
 import (
 	"bytes"
+	"fmt"
 	"context"
 	"encoding/json"
 	"errors"
@@ -239,12 +240,55 @@ func TestClientGoneDuringWriteIsNotAFault(t *testing.T) {
 	var logs bytes.Buffer
 	ctx := zerolog.New(&logs).WithContext(context.Background())
 
-	errs.Unknown.New(ctx).AddError(errors.New("context canceled")).Abort(&goneWriter{})
+	// The failure was caused by the request being abandoned.
+	errs.Unknown.New(ctx).AddError(fmt.Errorf("query: %w", context.Canceled)).Abort(&goneWriter{})
 	if strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"level":"warn"`) {
 		t.Fatalf("a hung-up client should warn, not error: %s", logs.String())
 	}
 	if len(got) != 0 {
-		t.Fatalf("a hung-up client should not be recorded: %+v", got)
+		t.Fatalf("a failure caused by the cancellation should not be recorded: %+v", got)
+	}
+}
+
+func TestClientGoneKeepsIndependentFault(t *testing.T) {
+	var got []errs.Record
+	errs.AddSink(errs.SinkFunc(func(_ context.Context, r errs.Record) { got = append(got, r) }))
+	t.Cleanup(errs.ResetSinks)
+	var logs bytes.Buffer
+	ctx := zerolog.New(&logs).WithContext(context.Background())
+
+	// A database fault whose 500 found no one listening is still a fault.
+	errs.Unknown.New(ctx).AddError(errors.New(secret)).Abort(&goneWriter{})
+	if !strings.Contains(logs.String(), `"level":"warn"`) || !strings.Contains(logs.String(), `"level":"error"`) {
+		t.Fatalf("want a warn for the write and an error for the fault: %s", logs.String())
+	}
+	if len(got) != 1 || !strings.Contains(got[0].Detail(), "billing_ledger") {
+		t.Fatalf("an independent fault must still be recorded: %+v", got)
+	}
+}
+
+func TestPublicAndRecordDoNotShareMaps(t *testing.T) {
+	var got []errs.Record
+	errs.AddSink(errs.SinkFunc(func(_ context.Context, r errs.Record) { got = append(got, r) }))
+	t.Cleanup(errs.ResetSinks)
+	e := errs.Unknown.New(context.Background()).Field("a", "1").Param("p", 1)
+	pub := e.Emit("test")
+	e.Field("b", "2").Param("q", 2)
+	if len(pub.Fields) != 1 || len(pub.Params) != 1 {
+		t.Fatalf("Public shares maps with the error: %+v", pub)
+	}
+	if len(got) != 1 || len(got[0].Fields) != 1 || len(got[0].Params) != 1 {
+		t.Fatalf("Record shares maps with the error: %+v", got)
+	}
+}
+
+func TestUnencodableParamStillSendsABody(t *testing.T) {
+	rec, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		errs.Unknown.New(r.Context()).Param("bad", make(chan int)).Abort(w)
+	})
+	p := decode(t, rec)
+	if p.Message != "unknown error" || p.Code != "internal_error" || p.Params != nil {
+		t.Fatalf("want the envelope without Params, got %q", rec.Body.String())
 	}
 }
 

@@ -1,6 +1,8 @@
 package errs
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -27,8 +29,13 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 	body, encErr := cfg.encoder.Encode(pub)
 	if encErr != nil {
 		// The Public view is plain data; failing to encode it is a bug in a
-		// custom Encoder. Fall back to the default rather than send nothing.
-		body, _ = JSON.Encode(pub)
+		// custom Encoder (or an unencodable Param). Fall back to JSON, and if
+		// even that fails, drop Params rather than send an empty body.
+		body, encErr = JSON.Encode(pub)
+		if encErr != nil {
+			pub.Params = nil
+			body, _ = JSON.Encode(pub)
+		}
 		w.Header().Set("Content-Type", JSON.ContentType())
 	} else {
 		w.Header().Set("Content-Type", cfg.encoder.ContentType())
@@ -39,19 +46,38 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 	w.WriteHeader(int(e.Status))
 	if _, err := w.Write(body); err != nil {
 		if ClientGone(err) {
-			// The client left before hearing about it. Keep the detail at
-			// warn, but do not page or record: whatever failed most likely
-			// failed because the request was abandoned.
+			// The client left before hearing about it. The failed write is
+			// only a warning. Whether the error itself is still a fault
+			// depends on what caused it: a failure caused by the abandoned
+			// request (context canceled) is not recorded, but an independent
+			// fault — a database error whose 500 found no one listening — is
+			// still logged and handed to the Sinks below.
 			event := zerolog.Ctx(e.context()).Warn().Err(err).
 				Int("status", int(e.Status)).Str("error_code", e.code)
-			applyAttrs(event, e.logStack).Msg("client gone while writing error response")
-			e.emitted = true
-			return true
+			if e.causedByCancellation() {
+				applyAttrs(event, e.logStack).Msg("client gone while writing error response")
+				e.emitted = true
+				return true
+			}
+			event.Msg("client gone while writing error response")
+		} else {
+			zerolog.Ctx(e.context()).Error().Err(err).Str("error_code", e.code).Msg("failed to write error response")
 		}
-		zerolog.Ctx(e.context()).Error().Err(err).Str("error_code", e.code).Msg("failed to write error response")
 	}
 	e.emit("http", "request aborted: "+e.Message())
 	return true
+}
+
+// causedByCancellation reports whether any recorded cause is the request's
+// own cancellation. A deadline is deliberately not included: a server-side
+// timeout is a fault.
+func (e *Error) causedByCancellation() bool {
+	for _, c := range e.causes {
+		if errors.Is(c, context.Canceled) {
+			return true
+		}
+	}
+	return false
 }
 
 // Emit logs and records e without writing an HTTP response, and returns the

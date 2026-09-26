@@ -1,6 +1,7 @@
 package hit
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -132,6 +133,11 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 	if secs, err := strconv.Atoi(v); err == nil {
 		if secs <= 0 {
 			return 0
+		}
+		// Clamp before multiplying: a huge value would overflow int64 and
+		// wrap to a negative or arbitrary delay.
+		if int64(secs) > int64(math.MaxInt64/int64(time.Second)) {
+			return time.Duration(math.MaxInt64)
 		}
 		return time.Duration(secs) * time.Second
 	}

@@ -221,7 +221,7 @@ func (c *Client[ErrRsp]) request(method, path string) *Request[ErrRsp] {
 	r.headers = c.headers.Clone()
 	r.client = c.httpClient
 	r.timeout = c.timeout
-	r.cache = c.cache
+	r.Cache(c.cache) // through Cache, so cached GETs coalesce by default
 	r.limiter = c.limiter
 	r.gate = c.gate
 	r.classify = c.classify

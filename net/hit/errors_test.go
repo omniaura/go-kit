@@ -273,3 +273,51 @@ func TestInferredChainWithErrorInto(t *testing.T) {
 		t.Fatalf("ErrorInto did not receive the typed body: %+v", apiErr)
 	}
 }
+
+func TestHugeRetryAfterDoesNotOverflow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "99999999999999")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	var rsp testItem
+	err := hit.GET[hit.AnyError](srv.URL).Do(context.Background(), &rsp)
+	if after := errs.AsError(context.Background(), err).RetryAfterHint(); after <= 0 {
+		t.Fatalf("a huge Retry-After wrapped to %s", after)
+	}
+}
+
+func TestClientCacheCoalescesByDefault(t *testing.T) {
+	var calls atomic.Int64
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		<-release
+		_ = json.NewEncoder(w).Encode(testItem{ID: 1})
+	}))
+	t.Cleanup(srv.Close)
+	cache, err := hit.NewMapCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := hit.NewClient[hit.AnyError](srv.URL).Cache(cache)
+
+	const n = 5
+	errsCh := make(chan error, n)
+	for range n {
+		go func() {
+			var rsp testItem
+			errsCh <- c.GET("/items/1").Do(context.Background(), &rsp)
+		}()
+	}
+	time.Sleep(50 * time.Millisecond) // let every caller reach the upstream or the flight
+	close(release)
+	for range n {
+		if err := <-errsCh; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("concurrent cache misses through Client.Cache made %d upstream calls, want 1", got)
+	}
+}
