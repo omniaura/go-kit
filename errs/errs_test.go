@@ -2,10 +2,10 @@ package errs_test
 
 import (
 	"bytes"
-	"fmt"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
