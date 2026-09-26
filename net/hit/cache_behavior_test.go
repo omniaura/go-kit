@@ -85,7 +85,7 @@ func TestCacheKeyIncludesPathQueryAndConfiguredDimensions(t *testing.T) {
 
 	cache := newRecordingCache()
 	var out testItem
-	err := hit.POST[testItem, hit.AnyError](server.URL+"/v1/models?b=2").
+	err := hit.POST[hit.AnyError](server.URL+"/v1/models?b=2").
 		Query("a", "1").
 		Header("Authorization", "Bearer secret").
 		Header("X-Scope", "tenant-a").
@@ -134,7 +134,7 @@ func TestPathComposesWithConstructorURL(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	if err := hit.GET[testItem, hit.AnyError](server.URL).Path("/v1/models").Do(context.Background(), &out); err != nil {
+	if err := hit.GET[hit.AnyError](server.URL).Path("/v1/models").Do(context.Background(), &out); err != nil {
 		t.Fatalf("Do: %v", err)
 	}
 }
@@ -273,7 +273,7 @@ func TestPlainGETDoesNotCoalesce(t *testing.T) {
 		go func() {
 			<-start
 			var out testItem
-			errs <- hit.GET[testItem, hit.AnyError](server.URL).Do(context.Background(), &out)
+			errs <- hit.GET[hit.AnyError](server.URL).Do(context.Background(), &out)
 		}()
 	}
 	close(start)
@@ -304,7 +304,7 @@ func TestCoalesceSuppressesConcurrentGETs(t *testing.T) {
 		go func() {
 			<-start
 			var out testItem
-			errs <- hit.GET[testItem, hit.AnyError](server.URL).Coalesce(true).Do(context.Background(), &out)
+			errs <- hit.GET[hit.AnyError](server.URL).Coalesce(true).Do(context.Background(), &out)
 		}()
 	}
 	close(start)
@@ -336,7 +336,7 @@ func TestCachedGETCoalescesByDefault(t *testing.T) {
 		go func() {
 			<-start
 			var out testItem
-			errs <- hit.GET[testItem, hit.AnyError](server.URL).Cache(cache).Do(context.Background(), &out)
+			errs <- hit.GET[hit.AnyError](server.URL).Cache(cache).Do(context.Background(), &out)
 		}()
 	}
 	close(start)
@@ -365,7 +365,7 @@ func TestMethodOverrideRecomputesCacheableDefault(t *testing.T) {
 	cache := newRecordingCache()
 	for i := 0; i < 2; i++ {
 		var out testItem
-		err := hit.GET[testItem, hit.AnyError](server.URL).
+		err := hit.GET[hit.AnyError](server.URL).
 			Cache(cache).
 			Method(http.MethodPost).
 			BodyString(`{}`).
@@ -387,7 +387,7 @@ func TestCacheGetErrorReturns(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem, hit.AnyError](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		Cache(errorCache{getErr: cacheErr}).
 		Do(context.Background(), &out)
 	if err == nil || !errors.Is(err, cacheErr) {
@@ -404,7 +404,7 @@ func TestCacheSetErrorReturns(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem, hit.AnyError](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		Cache(errorCache{setErr: cacheErr}).
 		Do(context.Background(), &out)
 	if err == nil || !errors.Is(err, cacheErr) {
@@ -427,7 +427,7 @@ func TestMalformedJSONDoesNotPopulateCache(t *testing.T) {
 
 	cache := newRecordingCache()
 	var out testItem
-	err := hit.GET[testItem, hit.AnyError](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		Cache(cache).
 		Fallback(testItem{ID: 99}).
 		Do(context.Background(), &out)
@@ -442,7 +442,7 @@ func TestMalformedJSONDoesNotPopulateCache(t *testing.T) {
 	}
 
 	out = testItem{}
-	if err := hit.GET[testItem, hit.AnyError](server.URL).Cache(cache).Do(context.Background(), &out); err != nil {
+	if err := hit.GET[hit.AnyError](server.URL).Cache(cache).Do(context.Background(), &out); err != nil {
 		t.Fatalf("second Do: %v", err)
 	}
 	if out.ID != 2 {
@@ -469,7 +469,7 @@ func TestRateLimiterBlocksConcurrentCallers(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() {
 			var out testItem
-			errs <- hit.GET[testItem, hit.AnyError](server.URL).
+			errs <- hit.GET[hit.AnyError](server.URL).
 				Coalesce(false).
 				Rate(limiter).
 				Do(context.Background(), &out)
@@ -522,7 +522,7 @@ func TestSemaphoreGateBoundsConcurrency(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			var out testItem
-			errs <- hit.GET[testItem, hit.AnyError](server.URL).
+			errs <- hit.GET[hit.AnyError](server.URL).
 				Coalesce(false).
 				Gate(gate).
 				Do(context.Background(), &out)

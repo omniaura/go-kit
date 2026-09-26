@@ -22,7 +22,7 @@ func ExampleRequest_Cache() {
 	cache := hit.NewLayeredCache(hot, warm)
 
 	var out testItem
-	_ = hit.GET[testItem, hit.AnyError](server.URL).
+	_ = hit.GET[hit.AnyError](server.URL).
 		Cache(cache).
 		Key(hit.Field("provider", "example")).
 		Do(context.Background(), &out)
@@ -40,7 +40,7 @@ func ExampleRequest_Rate() {
 	limiter, _ := hit.RPS(10)
 
 	var out testItem
-	_ = hit.GET[testItem, hit.AnyError](server.URL).
+	_ = hit.GET[hit.AnyError](server.URL).
 		Rate(limiter).
 		Do(context.Background(), &out)
 

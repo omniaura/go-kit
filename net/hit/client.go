@@ -14,7 +14,8 @@ import (
 // retry tables, rate limiting, concurrency gates and caching — plus E, the
 // provider's error schema. SDKs usually have one standardized error shape for
 // every endpoint and a different response shape per endpoint, so E is fixed
-// on the Client and Out is chosen per call (Go 1.27 generic methods):
+// on the Client and Out is inferred per call from Do(ctx, &out) (a Go 1.27
+// generic method) — no call site needs a type argument:
 //
 //	type apiError struct {
 //		Error struct {
@@ -27,7 +28,7 @@ import (
 //		Service("anthropic").
 //		Header("anthropic-version", "2023-06-01").
 //		Status(529, ErrOverloaded).
-//		Classify(func(status int, b apiError, _ http.Header) (hit.Classified, bool) {
+//		Classify(func(status int, b *apiError, _ http.Header) (hit.Classified, bool) {
 //			if b.Error.Type == "invalid_request_error" {
 //				return hit.Classified{Factory: ErrBadRequest, Code: b.Error.Type}, true
 //			}
@@ -37,7 +38,7 @@ import (
 //
 //	func CreateMessage(ctx context.Context, key string, req MessageRequest) (Message, error) {
 //		var out Message
-//		err := anthropic.POST[Message]("/v1/messages").Header("x-api-key", key).JSON(req).Do(ctx, &out)
+//		err := anthropic.POST("/v1/messages").Header("x-api-key", key).JSON(&req).Do(ctx, &out)
 //		return out, err
 //	}
 //
@@ -50,7 +51,7 @@ type Client[E any] struct {
 	cache         Cache
 	limiter       RateLimiter
 	gate          Gate
-	classify      func(status int, body E, header http.Header) (Classified, bool)
+	classify      func(status int, body *E, header http.Header) (Classified, bool)
 	errorMap      ErrorMap
 	baseURL       string
 	retryPolicy   errs.RetryPolicy
@@ -125,7 +126,7 @@ func (c *Client[E]) Status(status int, factory errs.ErrorFactory) *Client[E] {
 }
 
 // Classify picks a factory from the decoded error body; see Request.Classify.
-func (c *Client[E]) Classify(fn func(status int, body E, header http.Header) (Classified, bool)) *Client[E] {
+func (c *Client[E]) Classify(fn func(status int, body *E, header http.Header) (Classified, bool)) *Client[E] {
 	c.classify = fn
 	return c
 }
@@ -161,35 +162,35 @@ func (c *Client[E]) Cache(cache Cache) *Client[E] {
 	return c
 }
 
-// GET starts a GET of path whose 2xx body decodes as Out.
-func (c *Client[E]) GET[Out any](path string) *Request[Out, E] {
-	return clientRequest[Out](c, http.MethodGet, path)
+// GET starts a GET of path. The response type is inferred at Do.
+func (c *Client[E]) GET(path string) *Request[E] {
+	return c.request(http.MethodGet, path)
 }
 
-// POST starts a POST of path whose 2xx body decodes as Out.
-func (c *Client[E]) POST[Out any](path string) *Request[Out, E] {
-	return clientRequest[Out](c, http.MethodPost, path)
+// POST starts a POST of path. The response type is inferred at Do.
+func (c *Client[E]) POST(path string) *Request[E] {
+	return c.request(http.MethodPost, path)
 }
 
-// PUT starts a PUT of path whose 2xx body decodes as Out.
-func (c *Client[E]) PUT[Out any](path string) *Request[Out, E] {
-	return clientRequest[Out](c, http.MethodPut, path)
+// PUT starts a PUT of path. The response type is inferred at Do.
+func (c *Client[E]) PUT(path string) *Request[E] {
+	return c.request(http.MethodPut, path)
 }
 
-// PATCH starts a PATCH of path whose 2xx body decodes as Out.
-func (c *Client[E]) PATCH[Out any](path string) *Request[Out, E] {
-	return clientRequest[Out](c, http.MethodPatch, path)
+// PATCH starts a PATCH of path. The response type is inferred at Do.
+func (c *Client[E]) PATCH(path string) *Request[E] {
+	return c.request(http.MethodPatch, path)
 }
 
-// DELETE starts a DELETE of path whose 2xx body decodes as Out.
-func (c *Client[E]) DELETE[Out any](path string) *Request[Out, E] {
-	return clientRequest[Out](c, http.MethodDelete, path)
+// DELETE starts a DELETE of path. The response type is inferred at Do.
+func (c *Client[E]) DELETE(path string) *Request[E] {
+	return c.request(http.MethodDelete, path)
 }
 
-// clientRequest copies the Client's shared settings into a fresh Request so
+// request copies the Client's shared settings into a fresh Request so
 // per-call builders never mutate the Client.
-func clientRequest[Out, E any](c *Client[E], method, path string) *Request[Out, E] {
-	r := newRequest[Out, E](method, "", defaultCacheable(method))
+func (c *Client[E]) request(method, path string) *Request[E] {
+	r := newRequest[E](method, "", defaultCacheable(method))
 	r.baseURL = c.baseURL
 	r.path = path
 	r.headers = c.headers.Clone()

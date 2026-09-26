@@ -9,7 +9,7 @@ adapters, duplicate request suppression, and blocking request limits.
 ```go
 var out ModelsResponse
 
-err := hit.GET[ModelsResponse, hit.AnyError]("https://openrouter.ai").
+err := hit.GET[hit.AnyError]("https://openrouter.ai").
 	Path("/api/v1/models").
 	Query("supported_parameters", "tools").
 	Query("output_modalities", "text").
@@ -34,7 +34,7 @@ not leaked into map or Redis keys. Non-GET cacheable requests include a body has
 by default. Add more dimensions explicitly:
 
 ```go
-req := hit.GET[ModelsResponse, hit.AnyError](baseURL).
+req := hit.GET[hit.AnyError](baseURL).
 	Path("/api/v1/models").
 	Query("supported_parameters", "tools").
 	Headers("Authorization", "Bearer "+apiKey).
@@ -76,7 +76,7 @@ Layered cache with different TTLs:
 ```go
 cache := hit.NewLayeredCache(hot, warm)
 
-err := hit.GET[ModelsResponse, hit.AnyError](modelsURL).
+err := hit.GET[hit.AnyError](modelsURL).
 	Cache(cache).
 	Key(hit.Field("provider", "openrouter")).
 	Do(ctx, &out)
@@ -99,7 +99,7 @@ second:
 ```go
 limiter, err := hit.RPS(5)
 
-err = hit.GET[ModelsResponse, hit.AnyError](modelsURL).
+err = hit.GET[hit.AnyError](modelsURL).
 	Rate(limiter).
 	Do(ctx, &out)
 ```
@@ -109,25 +109,39 @@ Use a semaphore gate to cap concurrent in-flight requests:
 ```go
 gate, err := hit.NewSemaphore(16)
 
-err = hit.GET[ModelsResponse, hit.AnyError](detailsURL).
+err = hit.GET[hit.AnyError](detailsURL).
 	Gate(gate).
 	Do(ctx, &out)
 ```
 
 Both `Rate` and `Gate` honor request context cancellation while callers wait.
 
-## Two Schemas: Response and Error
+## Two Schemas, Inferred: Response and Error
 
-Every request declares the JSON shape of a success **and** of a failure:
+Every call has a success schema `Out` and an error schema `E`, and the types
+come from the pointers you already pass:
 
 ```go
-err := hit.GET[ModelsResponse, OpenRouterError](modelsURL).Do(ctx, &out)
+var out ModelsResponse
+err := hit.GET[OpenRouterError](modelsURL).Do(ctx, &out) // E explicit, Out inferred from &out
 ```
 
-On any non-2xx response the body is decoded as `E`, handed to `Classify`, and
-kept on the returned `*errs.Error`, so Go code reads it back typed:
+- **`Out` is inferred at `Do(ctx, &out)`.** Go infers type arguments only from
+  the arguments of the generic call itself, never backwards through a method
+  chain. So `Out` belongs on the last call, which is a Go 1.27 generic method,
+  and not on `GET`.
+- **`In` (the request body) is inferred at `JSON(&req)`.** It takes a pointer,
+  so the body is never copied on the way in. A request body type says nothing
+  about the response type, so `JSON` cannot supply `Out`.
+- **`E` is fixed once**, on the `Client`, or explicitly on a one-off
+  `hit.GET[E](url)`. On any non-2xx response the body is decoded as `E`, passed
+  to `Classify` as `*E`, copied into `ErrorInto(&apiErr)` if you asked for it,
+  and kept on the returned `*errs.Error`:
 
 ```go
+var apiErr OpenRouterError
+err := hit.GET[OpenRouterError](modelsURL).ErrorInto(&apiErr).Do(ctx, &out)
+// or, after the fact:
 if body, ok := errs.AsError(ctx, err).UpstreamAs[OpenRouterError](); ok { … }
 ```
 
@@ -138,8 +152,8 @@ shape.
 
 Providers usually have **one** error shape for every endpoint and a
 **different** response shape per endpoint. `hit.Client[E]` fixes `E` and the
-SDK-wide configuration once. Go 1.27 generic methods then let each call pick
-`Out`:
+SDK-wide configuration once. After `NewClient` no call site needs a type
+argument:
 
 ```go
 type apiError struct {
@@ -155,7 +169,7 @@ var anthropic = hit.NewClient[apiError]("https://api.anthropic.com").
 	HTTPClient(sharedHTTPClient).
 	Timeout(2 * time.Minute).
 	Status(529, ErrOverloaded).
-	Classify(func(status int, b apiError, _ http.Header) (hit.Classified, bool) {
+	Classify(func(status int, b *apiError, _ http.Header) (hit.Classified, bool) {
 		if b.Error.Type == "invalid_request_error" {
 			return hit.Classified{Factory: ErrBadRequest, Code: b.Error.Type}, true
 		}
@@ -165,13 +179,13 @@ var anthropic = hit.NewClient[apiError]("https://api.anthropic.com").
 
 func CreateMessage(ctx context.Context, key string, req MessageRequest) (Message, error) {
 	var out Message
-	err := anthropic.POST[Message]("/v1/messages").Header("x-api-key", key).JSON(req).Do(ctx, &out)
+	err := anthropic.POST("/v1/messages").Header("x-api-key", key).JSON(&req).Do(ctx, &out)
 	return out, err
 }
 
 func ListModels(ctx context.Context, key string) (ModelList, error) {
 	var out ModelList
-	err := anthropic.GET[ModelList]("/v1/models").Header("x-api-key", key).Do(ctx, &out)
+	err := anthropic.GET("/v1/models").Header("x-api-key", key).Do(ctx, &out)
 	return out, err
 }
 ```

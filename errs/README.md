@@ -100,7 +100,8 @@ body, ok := e.UpstreamAs[anthropicError]()       // the provider's decoded error
 
 `UpstreamAs` is how a `net/hit` caller branches on a provider's own error type
 without re-parsing the body. The same Go feature is what makes
-`hit.Client[E].GET[Out]` possible. Interface methods still cannot have type
+`hit`'s inferred chain possible: `client.POST(path).JSON(&req).Do(ctx, &out)`,
+where `Do` and `JSON` are generic methods. Interface methods still cannot have type
 parameters, so these are concrete methods on `*Error`.
 
 ## Building SDKs with `net/hit`
