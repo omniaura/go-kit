@@ -151,14 +151,44 @@ if body, ok := errs.AsError(ctx, err).UpstreamAs[OpenRouterError](); ok { … }
 
 ## Not only JSON: DataType
 
-`Body`, `Do` and error decoding choose a wire encoding per type, in this order:
+`Body`, `Do` and error decoding choose a wire encoding per type. The request
+body and the response are resolved **independently**, so mixed APIs work:
 
-1. An explicit `BodyAs(dt, &req)` / `ResponseAs(dt)`.
-2. The type's own `hit.HasDataType`, checked on the pointer.
-3. The request or Client default, set with `DataType(dt)`.
-4. JSON.
+| | Request body (`Body`) | 2xx and error bodies (`Do`, `ErrorInto`) |
+|---|---|---|
+| 1 | `BodyAs(dt, &req)` | `ResponseAs(dt)` (2xx only) |
+| 2 | `*Req`'s own `hit.HasDataType` | `*Rsp` / `*ErrRsp`'s own `hit.HasDataType` |
+| 3 | `RequestDataType(dt)` or `DataType(dt)` | `ResponseDataType(dt)` or `DataType(dt)` |
+| 4 | JSON | JSON |
 
-`Do` also sends the response type's `Accept` unless you set one yourself.
+`DataType(dt)` sets both directions, and `RequestDataType` / `ResponseDataType`
+set one. The response never falls back to the request-body default, so a form
+post that answers in JSON decodes as JSON. `Do` also sends the response type's
+`Accept` unless you set one yourself.
+
+```go
+// Form in, JSON out (typical OAuth): the request type declares Form, and the
+// response and error bodies stay JSON.
+type TokenRequest struct {
+	GrantType string   `form:"grant_type"`
+	ClientID  string   `form:"client_id"`
+	Scope     []string `form:"scope,omitempty"`
+}
+func (*TokenRequest) DataType() hit.DataType { return hit.Form }
+
+var tok TokenResponse
+var oauthErr OAuthError
+err := auth.POST("/token").Body(&req).ErrorInto(&oauthErr).Do(ctx, &tok)
+
+// Or for a whole SDK that posts forms and answers in JSON:
+auth := hit.NewClient[OAuthError](baseURL).RequestDataType(hit.Form)
+```
+
+`hit.Form` encodes `url.Values`, string maps and structs. Struct fields use
+`form:"name,omitempty"` tags, fall back to the `json` tag name, and are skipped
+with `"-"`. Supported field types are scalars, `encoding.TextMarshaler`,
+pointers (nil is omitted), slices (repeated keys) and embedded structs. An
+unsupported field type is an error, never a silently dropped field.
 
 ```go
 type Envelope struct{ XMLName xml.Name `xml:"Envelope"`; … }
@@ -173,7 +203,7 @@ auth.POST("/oauth/token").BodyAs(hit.Form, &form).ResponseAs(hit.Text).Do(ctx, &
 legacy := hit.NewClient[soapFault](baseURL).DataType(hit.XML) // an all-XML SDK
 ```
 
-Built in: `hit.JSON`, `hit.XML`, `hit.Form` (url.Values / string maps),
+Built in: `hit.JSON`, `hit.XML`, `hit.Form` (url.Values, string maps, structs),
 `hit.Text` and `hit.Bytes` (string / []byte). Anything else, such as protobuf,
 msgpack or CBOR, is a three-method `DataType`. `.JSON(&req)` forces JSON
 whatever `Req` declares, and `RawBody([]byte)`, `BodyString`, `BodyReader` and
