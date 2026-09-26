@@ -54,7 +54,8 @@ type Client[ErrRsp any] struct {
 	gate          Gate
 	classify      func(status int, body *ErrRsp, header http.Header) (Classified, bool)
 	errorMap      ErrorMap
-	dataType      DataType
+	requestType   DataType
+	responseDflt  DataType
 	baseURL       string
 	retryPolicy   errs.RetryPolicy
 	timeout       time.Duration
@@ -76,11 +77,25 @@ func (c *Client[ErrRsp]) Service(name string) *Client[ErrRsp] {
 	return c
 }
 
-// DataType sets the SDK-wide encoding for request bodies, responses and error
-// bodies whose types do not declare their own (HasDataType) — e.g. hit.XML for
-// a SOAP API. JSON when unset.
+// DataType sets the SDK-wide encoding for both directions — request bodies
+// and 2xx/error bodies whose types do not declare their own (HasDataType) —
+// e.g. hit.XML for a SOAP API. JSON when unset.
 func (c *Client[ErrRsp]) DataType(dt DataType) *Client[ErrRsp] {
-	c.dataType = dt
+	c.requestType = dt
+	c.responseDflt = dt
+	return c
+}
+
+// RequestDataType sets the SDK-wide request-body encoding only — e.g. hit.Form
+// for an API that takes form posts and answers in JSON.
+func (c *Client[ErrRsp]) RequestDataType(dt DataType) *Client[ErrRsp] {
+	c.requestType = dt
+	return c
+}
+
+// ResponseDataType sets the SDK-wide encoding of 2xx and error bodies only.
+func (c *Client[ErrRsp]) ResponseDataType(dt DataType) *Client[ErrRsp] {
+	c.responseDflt = dt
 	return c
 }
 
@@ -210,7 +225,8 @@ func (c *Client[ErrRsp]) request(method, path string) *Request[ErrRsp] {
 	r.limiter = c.limiter
 	r.gate = c.gate
 	r.classify = c.classify
-	r.dataType = c.dataType
+	r.requestType = c.requestType
+	r.responseDflt = c.responseDflt
 	r.retryPolicy = c.retryPolicy
 	r.retrySet = c.retrySet
 	r.statusRetries = maps.Clone(c.statusRetries)

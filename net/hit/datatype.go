@@ -1,10 +1,14 @@
 package hit
 
 import (
+	"encoding"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/url"
+	"reflect"
+	"strconv"
+	"strings"
 )
 
 // DataType is a wire encoding for request and response bodies: the
@@ -38,8 +42,13 @@ var (
 	// XML is application/xml via encoding/xml.
 	XML DataType = xmlType{}
 	// Form is application/x-www-form-urlencoded. It marshals url.Values,
-	// map[string]string and map[string][]string (or pointers to them) and
-	// unmarshals into *url.Values or *map[string]string.
+	// map[string]string, map[string][]string and structs (or pointers to
+	// them), and unmarshals into *url.Values or *map[string]string. Struct
+	// fields are named by a `form:"name,omitempty"` tag, falling back to the
+	// json tag's name, then the field name; "-" skips a field. Supported
+	// field types: strings, bools, integers, floats, encoding.TextMarshaler,
+	// pointers to those (nil is omitted), slices of those (repeated keys) and
+	// embedded structs (flattened).
 	Form DataType = formType{}
 	// Text is text/plain; charset=utf-8 for string and []byte.
 	Text DataType = rawType{contentType: "text/plain; charset=utf-8"}
@@ -90,9 +99,127 @@ func (formType) Marshal(v any) ([]byte, error) {
 	case *map[string]string:
 		values = mapValues(*t)
 	default:
-		return nil, fmt.Errorf("hit: Form cannot marshal %T", v)
+		var err error
+		values, err = structValues(v)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return []byte(values.Encode()), nil
+}
+
+// structValues encodes a struct (or pointer to one) as form values.
+func structValues(v any) (url.Values, error) {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return url.Values{}, nil
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("hit: Form cannot marshal %T", v)
+	}
+	values := url.Values{}
+	if err := addStructValues(values, rv); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func addStructValues(values url.Values, rv reflect.Value) error {
+	rt := rv.Type()
+	for i := range rt.NumField() {
+		field := rt.Field(i)
+		fv := rv.Field(i)
+		if field.Anonymous && fv.Kind() == reflect.Struct && field.Tag.Get("form") == "" {
+			if err := addStructValues(values, fv); err != nil {
+				return err
+			}
+			continue
+		}
+		if !field.IsExported() {
+			continue
+		}
+		name, omitEmpty := formFieldName(field)
+		if name == "-" {
+			continue
+		}
+		if omitEmpty && fv.IsZero() {
+			continue
+		}
+		if fv.Kind() == reflect.Slice && fv.Type().Elem().Kind() != reflect.Uint8 {
+			for j := range fv.Len() {
+				s, ok, err := formScalar(fv.Index(j))
+				if err != nil {
+					return fmt.Errorf("hit: Form field %s: %w", field.Name, err)
+				}
+				if ok {
+					values.Add(name, s)
+				}
+			}
+			continue
+		}
+		s, ok, err := formScalar(fv)
+		if err != nil {
+			return fmt.Errorf("hit: Form field %s: %w", field.Name, err)
+		}
+		if ok {
+			values.Set(name, s)
+		}
+	}
+	return nil
+}
+
+func formFieldName(field reflect.StructField) (string, bool) {
+	tag, ok := field.Tag.Lookup("form")
+	if !ok {
+		tag = field.Tag.Get("json")
+	}
+	name, opts, _ := strings.Cut(tag, ",")
+	if name == "" {
+		name = field.Name
+	}
+	return name, strings.Contains(","+opts+",", ",omitempty,")
+}
+
+var textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+
+// formScalar renders one value; ok=false means "omit" (a nil pointer).
+func formScalar(fv reflect.Value) (string, bool, error) {
+	for fv.Kind() == reflect.Pointer || fv.Kind() == reflect.Interface {
+		if fv.IsNil() {
+			return "", false, nil
+		}
+		if fv.Type().Implements(textMarshalerType) {
+			break
+		}
+		fv = fv.Elem()
+	}
+	if fv.Type().Implements(textMarshalerType) {
+		b, err := fv.Interface().(encoding.TextMarshaler).MarshalText()
+		return string(b), err == nil, err
+	}
+	if fv.CanAddr() && reflect.PointerTo(fv.Type()).Implements(textMarshalerType) {
+		b, err := fv.Addr().Interface().(encoding.TextMarshaler).MarshalText()
+		return string(b), err == nil, err
+	}
+	switch fv.Kind() {
+	case reflect.String:
+		return fv.String(), true, nil
+	case reflect.Bool:
+		return strconv.FormatBool(fv.Bool()), true, nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(fv.Int(), 10), true, nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(fv.Uint(), 10), true, nil
+	case reflect.Float32:
+		return strconv.FormatFloat(fv.Float(), 'f', -1, 32), true, nil
+	case reflect.Float64:
+		return strconv.FormatFloat(fv.Float(), 'f', -1, 64), true, nil
+	default:
+		return "", false, fmt.Errorf("unsupported type %s", fv.Type())
+	}
 }
 
 func (formType) Unmarshal(data []byte, v any) error {

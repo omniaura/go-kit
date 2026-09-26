@@ -67,7 +67,8 @@ type Request[ErrRsp any] struct {
 	errorMap      *ErrorMap
 	classify      func(status int, body *ErrRsp, header http.Header) (Classified, bool)
 	errorInto     *ErrRsp
-	dataType      DataType
+	requestType   DataType // default for request bodies
+	responseDflt  DataType // default for 2xx and error bodies
 	responseType  DataType
 	decodeAs      DataType
 	service       string
@@ -250,7 +251,7 @@ func (r *Request[ErrRsp]) Body[Req any](req *Req) *Request[ErrRsp] {
 		r.body = nil
 		return r
 	}
-	return r.encodeBody(dataTypeOf(any(req), r.defaultDataType()), req)
+	return r.encodeBody(dataTypeOf(any(req), orJSON(r.requestType)), req)
 }
 
 // BodyAs encodes req with dt regardless of its type, for types you do not own:
@@ -286,10 +287,26 @@ func (r *Request[ErrRsp]) RawBody(body []byte) *Request[ErrRsp] {
 	return r
 }
 
-// DataType sets the encoding used for the request body, the response and the
-// error body whenever those types do not declare their own (HasDataType).
+// DataType sets the default encoding for both directions — the request body
+// and the 2xx/error response bodies — for types that do not declare their own
+// (HasDataType). Use RequestDataType / ResponseDataType when they differ, e.g.
+// a form-encoded request that answers in JSON.
 func (r *Request[ErrRsp]) DataType(dt DataType) *Request[ErrRsp] {
-	r.dataType = dt
+	r.requestType = dt
+	r.responseDflt = dt
+	return r
+}
+
+// RequestDataType sets the default request-body encoding only.
+func (r *Request[ErrRsp]) RequestDataType(dt DataType) *Request[ErrRsp] {
+	r.requestType = dt
+	return r
+}
+
+// ResponseDataType sets the default encoding of 2xx and error bodies only.
+// Unlike ResponseAs it yields to a response type's own HasDataType.
+func (r *Request[ErrRsp]) ResponseDataType(dt DataType) *Request[ErrRsp] {
+	r.responseDflt = dt
 	return r
 }
 
@@ -304,23 +321,24 @@ func (r *Request[ErrRsp]) responseCodec() DataType {
 	if r.decodeAs != nil {
 		return r.decodeAs
 	}
-	return r.defaultDataType()
+	return orJSON(r.responseDflt)
 }
 
-func (r *Request[ErrRsp]) defaultDataType() DataType {
-	if r.dataType != nil {
-		return r.dataType
+func orJSON(dt DataType) DataType {
+	if dt != nil {
+		return dt
 	}
 	return JSON
 }
 
 // responseDataType resolves how a 2xx body decodes into rsp: ResponseAs, then
-// rsp's own DataType, then the request default.
+// rsp's own DataType, then the response default (never the request-body
+// default: a form post that answers in JSON decodes as JSON).
 func (r *Request[ErrRsp]) responseDataType(rsp any) DataType {
 	if r.responseType != nil {
 		return r.responseType
 	}
-	return dataTypeOf(rsp, r.defaultDataType())
+	return dataTypeOf(rsp, orJSON(r.responseDflt))
 }
 
 // BodyString sets the request body from a string.
@@ -409,7 +427,7 @@ func (r *Request[ErrRsp]) Fallback(v any) *Request[ErrRsp] {
 		r.fallback = nil
 		return r
 	}
-	body, err := dataTypeOf(v, r.defaultDataType()).Marshal(v)
+	body, err := dataTypeOf(v, orJSON(r.responseDflt)).Marshal(v)
 	if err != nil {
 		r.setBuildErr(err)
 		return r
@@ -932,7 +950,7 @@ func (r *Request[ErrRsp]) statusError(req *http.Request, rsp *http.Response, bod
 		providerCode string
 		classified   bool
 	)
-	if len(body) > 0 && dataTypeOf(any(&decoded), r.defaultDataType()).Unmarshal(body, &decoded) == nil {
+	if len(body) > 0 && dataTypeOf(any(&decoded), orJSON(r.responseDflt)).Unmarshal(body, &decoded) == nil {
 		hasDecoded = true
 		if r.classify != nil {
 			var c Classified
