@@ -115,3 +115,55 @@ err = hit.GET[ModelsResponse](detailsURL).
 ```
 
 Both `Rate` and `Gate` honor request context cancellation while callers wait.
+
+## Typed Errors
+
+A failed call returns an `*errs.Error` that describes the failure from the
+caller's side. By default:
+
+| Upstream response | Error |
+|---|---|
+| 429 | `hit.ErrUpstreamRateLimited` (503, action `wait`, with any `Retry-After` hint) |
+| 408, 5xx | `hit.ErrUpstreamUnavailable` (503, action `retry`) |
+| any other non-2xx | `hit.ErrUpstream` (502) |
+| no response (dial, TLS, timeout) | `hit.ErrUpstreamUnavailable` |
+
+An upstream 401 means *your* credential is wrong. It must never reach your own
+caller as a 401 that signs them out. The upstream's real status, the body
+(truncated), the provider's error type, and request-id and rate-limit headers
+are kept on `errs.Upstream` for the log line and the error `Sink`s. The URL is
+recorded without its query string.
+
+A provider client declares its own mapping once:
+
+```go
+type anthropicError struct {
+	Error struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+var anthropicErrors = hit.ErrorMap{
+	Service: "anthropic",
+	Status:  map[int]errs.ErrorFactory{529: ErrOverloaded},
+	Classify: hit.DecodeErrorBody(func(status int, b anthropicError) (hit.Classified, bool) {
+		switch b.Error.Type {
+		case "invalid_request_error":
+			return hit.Classified{Factory: ErrBadPrompt, Code: b.Error.Type}, true
+		}
+		return hit.Classified{Code: b.Error.Type}, false // keep the type, map by status
+	}),
+	KeepHeaders: []string{"Request-Id"},
+}
+
+err := hit.POST[MessageResponse](baseURL).Path("/v1/messages").
+	JSON(req).
+	Errors(anthropicErrors).
+	StatusRetryPolicy(errs.TransientStatusRetry(errs.ExponentialRetry(3, 250*time.Millisecond, 4*time.Second))).
+	Do(ctx, &out)
+```
+
+Retry precedence per status: `StatusRetry` on the request, then the chosen
+factory's own `WithRetryPolicy`, then the request's `Retry`. A `Retry-After`
+hint longer than the policy's backoff is honoured, up to `MaxRetryAfter`.

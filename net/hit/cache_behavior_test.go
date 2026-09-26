@@ -390,7 +390,7 @@ func TestCacheGetErrorReturns(t *testing.T) {
 	err := hit.GET[testItem](server.URL).
 		Cache(errorCache{getErr: cacheErr}).
 		Do(context.Background(), &out)
-	if err == nil || !strings.Contains(err.Error(), cacheErr.Error()) {
+	if err == nil || !errors.Is(err, cacheErr) {
 		t.Fatalf("Do error = %v, want cache error", err)
 	}
 }
@@ -407,7 +407,7 @@ func TestCacheSetErrorReturns(t *testing.T) {
 	err := hit.GET[testItem](server.URL).
 		Cache(errorCache{setErr: cacheErr}).
 		Do(context.Background(), &out)
-	if err == nil || !strings.Contains(err.Error(), cacheErr.Error()) {
+	if err == nil || !errors.Is(err, cacheErr) {
 		t.Fatalf("Do error = %v, want cache set error", err)
 	}
 }

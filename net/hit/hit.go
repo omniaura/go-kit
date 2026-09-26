@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -48,6 +49,8 @@ type Request[Out any] struct {
 	retryPolicy   errs.RetryPolicy
 	retrySet      bool
 	statusRetries errs.StatusRetryPolicy
+	errorMap      *ErrorMap
+	service       string
 }
 
 func newRequest[Out any](method, rawURL string, cacheable bool) *Request[Out] {
@@ -451,6 +454,18 @@ func (r *Request[Out]) StatusRetryPolicy(policy errs.StatusRetryPolicy) *Request
 	return r
 }
 
+// Errors maps this request's failures to typed errors; see ErrorMap.
+func (r *Request[Out]) Errors(m ErrorMap) *Request[Out] {
+	r.errorMap = &m
+	return r
+}
+
+// Service names the upstream on error records when no ErrorMap names it.
+func (r *Request[Out]) Service(name string) *Request[Out] {
+	r.service = name
+	return r
+}
+
 // WithStatusRetryPolicy configures status-code retry metadata.
 func (r *Request[Out]) WithStatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out] {
 	return r.StatusRetryPolicy(policy)
@@ -709,30 +724,68 @@ func (r *Request[Out]) executeBytesWithRetry(ctx context.Context) ([]byte, error
 			return body, nil
 		}
 		policy, ok := errs.RetryPolicyOf(err)
-		if !ok || !policy.ShouldRetry(attempt) {
+		if !ok {
 			return nil, err
 		}
-		if err := policy.Wait(ctx, attempt); err != nil {
+		delay, retry := policy.Next(attempt, err)
+		if !retry {
+			return nil, err
+		}
+		if err := errs.Sleep(ctx, delay); err != nil {
 			return nil, r.error(ctx, err)
 		}
 	}
 }
 
 func (r *Request[Out]) executeBytes(req *http.Request) ([]byte, error) {
+	started := time.Now()
 	rsp, err := r.httpClient().Do(req)
 	if err != nil {
-		return nil, r.error(req.Context(), err)
+		return nil, r.transportError(req, err, time.Since(started))
 	}
 	defer rsp.Body.Close()
 
 	body, err := io.ReadAll(rsp.Body)
 	if err != nil {
-		return nil, r.error(req.Context(), err)
+		return nil, r.transportError(req, err, time.Since(started))
 	}
 	if rsp.StatusCode < http.StatusOK || rsp.StatusCode >= http.StatusMultipleChoices {
-		return nil, r.statusError(req.Context(), rsp.StatusCode, body)
+		return nil, r.statusError(req, rsp, body, time.Since(started))
 	}
 	return body, nil
+}
+
+func (r *Request[Out]) serviceName(req *http.Request) string {
+	if r.errorMap != nil && r.errorMap.Service != "" {
+		return r.errorMap.Service
+	}
+	if r.service != "" {
+		return r.service
+	}
+	return req.URL.Host
+}
+
+// transportError is a call that got no usable response: dial, TLS, timeout or
+// a body cut short. The request's own retry policy applies.
+func (r *Request[Out]) transportError(req *http.Request, err error, took time.Duration) *errs.Error {
+	ctx := req.Context()
+	if errors.Is(err, context.Canceled) {
+		// The caller gave up; that is not an upstream failure. A deadline is
+		// different: the upstream was too slow, which is its failure.
+		return r.error(ctx, err)
+	}
+	e := r.errorMap.transport().New(ctx).
+		AddError(err).
+		Upstream(errs.Upstream{
+			Service:  r.serviceName(req),
+			Method:   req.Method,
+			URL:      redactURL(req.URL),
+			Duration: took,
+		})
+	if r.retrySet {
+		e.WithRetryPolicy(r.retryPolicy)
+	}
+	return e
 }
 
 func (r *Request[Out]) error(ctx context.Context, err error) *errs.Error {
@@ -743,18 +796,39 @@ func (r *Request[Out]) error(ctx context.Context, err error) *errs.Error {
 	return e
 }
 
-func (r *Request[Out]) statusError(ctx context.Context, status int, body []byte) *errs.Error {
-	err := errs.NewFactory(status, "http request failed").
-		New(ctx).
-		Err(fmt.Errorf("status %d: %s", status, string(body)))
-	if policy, ok := r.retryPolicyForStatus(status); ok {
-		err.WithRetryPolicy(policy)
+// statusError maps a non-2xx response through the ErrorMap. The client-facing
+// part comes from the chosen factory; the upstream's status, body, headers and
+// own error code are kept server-side.
+func (r *Request[Out]) statusError(req *http.Request, rsp *http.Response, body []byte, took time.Duration) *errs.Error {
+	ctx := req.Context()
+	view := Response{Status: rsp.StatusCode, Header: rsp.Header, Body: body}
+	factory, providerCode := r.errorMap.factoryFor(view)
+	e := factory.New(ctx).Upstream(errs.Upstream{
+		Service:  r.serviceName(req),
+		Method:   req.Method,
+		URL:      redactURL(req.URL),
+		Status:   rsp.StatusCode,
+		Body:     truncate(body),
+		Code:     providerCode,
+		Header:   r.errorMap.keptHeaders(rsp.Header),
+		Duration: took,
+	})
+	if after := parseRetryAfter(rsp.Header.Get("Retry-After"), time.Now()); after > 0 {
+		e.RetryAfter(after)
 	}
-	return err
+	if policy, ok := r.retryPolicyForStatus(rsp.StatusCode, factory); ok {
+		e.WithRetryPolicy(policy)
+	}
+	return e
 }
 
-func (r *Request[Out]) retryPolicyForStatus(status int) (errs.RetryPolicy, bool) {
+// retryPolicyForStatus: a per-status policy on the request wins, then the
+// factory's own declared policy, then the request's fallback policy.
+func (r *Request[Out]) retryPolicyForStatus(status int, factory errs.ErrorFactory) (errs.RetryPolicy, bool) {
 	if policy, ok := r.statusRetries.ForStatus(status); ok {
+		return policy, true
+	}
+	if policy, ok := factory.RetryPolicy(); ok {
 		return policy, true
 	}
 	if r.retrySet {

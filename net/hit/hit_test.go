@@ -451,8 +451,14 @@ func TestErrs_Non2xx(t *testing.T) {
 	if !errors.As(err, &e) {
 		t.Fatalf("expected *errs.Error, got %T", err)
 	}
-	if e.Status != http.StatusNotFound {
-		t.Fatalf("expected status 404, got %d", e.Status)
+	// The error describes OUR failure (a bad gateway); the upstream's 404 is
+	// kept server-side, not forwarded as our status.
+	if e.Status != http.StatusBadGateway || !hit.ErrUpstream.Is(e) {
+		t.Fatalf("expected ErrUpstream 502, got %d %s", e.Status, e.Code())
+	}
+	up, ok := e.UpstreamInfo()
+	if !ok || up.Status != http.StatusNotFound || up.Body != "not found" {
+		t.Fatalf("expected upstream 404 on the record, got %+v", up)
 	}
 }
 
