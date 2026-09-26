@@ -38,11 +38,17 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 	}
 	w.WriteHeader(int(e.Status))
 	if _, err := w.Write(body); err != nil {
-		event := zerolog.Ctx(e.context()).Error()
 		if ClientGone(err) {
-			event = zerolog.Ctx(e.context()).Warn()
+			// The client left before hearing about it. Keep the detail at
+			// warn, but do not page or record: whatever failed most likely
+			// failed because the request was abandoned.
+			event := zerolog.Ctx(e.context()).Warn().Err(err).
+				Int("status", int(e.Status)).Str("error_code", e.code)
+			applyAttrs(event, e.logStack).Msg("client gone while writing error response")
+			e.emitted = true
+			return true
 		}
-		event.Err(err).Str("error_code", e.code).Msg("failed to write error response")
+		zerolog.Ctx(e.context()).Error().Err(err).Str("error_code", e.code).Msg("failed to write error response")
 	}
 	e.emit("http", "request aborted: "+e.Message())
 	return true

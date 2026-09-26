@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -217,5 +218,32 @@ func TestCausesUnwrapButStayOffTheWire(t *testing.T) {
 	}
 	if strings.Contains(e.Error(), "billing_ledger") {
 		t.Fatalf("Error() leaked the cause: %s", e.Error())
+	}
+}
+
+type goneWriter struct{ h http.Header }
+
+func (w *goneWriter) Header() http.Header {
+	if w.h == nil {
+		w.h = http.Header{}
+	}
+	return w.h
+}
+func (w *goneWriter) WriteHeader(int)           {}
+func (w *goneWriter) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+
+func TestClientGoneDuringWriteIsNotAFault(t *testing.T) {
+	var got []errs.Record
+	errs.AddSink(errs.SinkFunc(func(_ context.Context, r errs.Record) { got = append(got, r) }))
+	t.Cleanup(errs.ResetSinks)
+	var logs bytes.Buffer
+	ctx := zerolog.New(&logs).WithContext(context.Background())
+
+	errs.Unknown.New(ctx).AddError(errors.New("context canceled")).Abort(&goneWriter{})
+	if strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"level":"warn"`) {
+		t.Fatalf("a hung-up client should warn, not error: %s", logs.String())
+	}
+	if len(got) != 0 {
+		t.Fatalf("a hung-up client should not be recorded: %+v", got)
 	}
 }
