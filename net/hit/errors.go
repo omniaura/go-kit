@@ -1,7 +1,6 @@
 package hit
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -35,13 +34,6 @@ var defaultKeptHeaders = []string{
 	"X-Ratelimit-Remaining-Requests", "X-Ratelimit-Reset-Requests",
 }
 
-// Response is a non-2xx upstream response, as seen by a Classify function.
-type Response struct {
-	Header http.Header
-	Body   []byte
-	Status int
-}
-
 // Classified is a Classify verdict: the factory to raise, and the provider's
 // own error code/type for the server-side record.
 type Classified struct {
@@ -49,33 +41,16 @@ type Classified struct {
 	Code    string
 }
 
-// ErrorMap turns an upstream's failures into typed errors. Declare one per
-// provider next to its request helpers; with it, every call through hit returns
-// an *errs.Error that already knows its retry policy, what the caller can do
-// and what the provider said — the error half of a hand-rolled SDK.
+// ErrorMap turns an upstream's failures into typed errors by status. Declare
+// one per provider, usually on a Client; the typed Classify (on the Client or
+// Request) decides first from the decoded error body, then:
 //
-//	var anthropicErrors = hit.ErrorMap{
-//		Service: "anthropic",
-//		Status:  map[int]errs.ErrorFactory{529: ErrOverloaded},
-//		Classify: hit.DecodeErrorBody(func(status int, b anthropicError) (hit.Classified, bool) {
-//			if b.Error.Type == "invalid_request_error" {
-//				return hit.Classified{Factory: ErrBadPrompt, Code: b.Error.Type}, true
-//			}
-//			return hit.Classified{Code: b.Error.Type}, false
-//		}),
-//		KeepHeaders: []string{"Request-Id"},
-//	}
-//
-// Resolution order for a non-2xx response: Classify, then Status, then
-// ClientError/ServerError, then the package defaults (429 → ErrUpstreamRateLimited,
-// 408/5xx → ErrUpstreamUnavailable, anything else → ErrUpstream).
+//	Status[code] → ClientError / ServerError → package defaults
+//	(429 → ErrUpstreamRateLimited, 408/5xx → ErrUpstreamUnavailable,
+//	anything else → ErrUpstream)
 type ErrorMap struct {
-	Status map[int]errs.ErrorFactory
-	// Classify inspects the response (typically decoding the provider's error
-	// body) and picks a factory. Returning false with a Code keeps the code on
-	// the record but falls through to the status mapping.
-	Classify func(Response) (Classified, bool)
-	Service  string
+	Status  map[int]errs.ErrorFactory
+	Service string
 	// KeepHeaders adds response headers to keep on the upstream record.
 	KeepHeaders []string
 	ClientError errs.ErrorFactory
@@ -84,47 +59,27 @@ type ErrorMap struct {
 	Transport errs.ErrorFactory
 }
 
-// DecodeErrorBody adapts a typed error-body decoder to ErrorMap.Classify. The
-// body is decoded as E; bodies that are not JSON of that shape fall through.
-func DecodeErrorBody[E any](fn func(status int, body E) (Classified, bool)) func(Response) (Classified, bool) {
-	return func(rsp Response) (Classified, bool) {
-		var body E
-		if len(rsp.Body) == 0 || json.Unmarshal(rsp.Body, &body) != nil {
-			return Classified{}, false
-		}
-		return fn(rsp.Status, body)
-	}
-}
-
 func isSet(f errs.ErrorFactory) bool { return f.Status() != 0 }
 
-func (m *ErrorMap) factoryFor(rsp Response) (errs.ErrorFactory, string) {
-	var providerCode string
+func (m *ErrorMap) factoryFor(status int) errs.ErrorFactory {
 	if m != nil {
-		if m.Classify != nil {
-			c, ok := m.Classify(rsp)
-			providerCode = c.Code
-			if ok && isSet(c.Factory) {
-				return c.Factory, providerCode
-			}
+		if f, ok := m.Status[status]; ok {
+			return f
 		}
-		if f, ok := m.Status[rsp.Status]; ok {
-			return f, providerCode
+		if status >= 500 && isSet(m.ServerError) {
+			return m.ServerError
 		}
-		if rsp.Status >= 500 && isSet(m.ServerError) {
-			return m.ServerError, providerCode
-		}
-		if rsp.Status < 500 && isSet(m.ClientError) {
-			return m.ClientError, providerCode
+		if status < 500 && isSet(m.ClientError) {
+			return m.ClientError
 		}
 	}
 	switch {
-	case rsp.Status == http.StatusTooManyRequests:
-		return ErrUpstreamRateLimited, providerCode
-	case rsp.Status == http.StatusRequestTimeout || rsp.Status >= 500:
-		return ErrUpstreamUnavailable, providerCode
+	case status == http.StatusTooManyRequests:
+		return ErrUpstreamRateLimited
+	case status == http.StatusRequestTimeout || status >= 500:
+		return ErrUpstreamUnavailable
 	default:
-		return ErrUpstream, providerCode
+		return ErrUpstream
 	}
 }
 

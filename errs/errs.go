@@ -234,6 +234,23 @@ func (e *Error) Retryable() bool {
 // Attrs returns the server-only attributes.
 func (e *Error) Attrs() []Attr { return e.logStack }
 
+// AttrAs returns the most recent server-only attribute named key, typed as T.
+//
+//	if id, ok := e.AttrAs[string]("user_id"); ok { … }
+func (e *Error) AttrAs[T any](key string) (T, bool) {
+	var zero T
+	if e == nil {
+		return zero, false
+	}
+	for i := len(e.logStack) - 1; i >= 0; i-- {
+		if e.logStack[i].Key == key {
+			v, ok := e.logStack[i].Value.(T)
+			return v, ok
+		}
+	}
+	return zero, false
+}
+
 // Detail renders the server-only attributes as one line, e.g. for a database
 // column.
 func (e *Error) Detail() string {

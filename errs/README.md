@@ -88,10 +88,27 @@ the policy with the error's hint. `TransientStatusRetry(policy)` is a starting
 per-status table (408, 425, 429, 5xx); override single statuses with
 `.With(409, …)`.
 
+## Go 1.27: typed reads off the error
+
+This module requires Go 1.27 for generic methods, which let an error answer
+typed questions directly:
+
+```go
+id, ok := e.AttrAs[string]("user_id")            // a server-only attribute, typed
+body, ok := e.UpstreamAs[anthropicError]()       // the provider's decoded error body
+```
+
+`UpstreamAs` is how a `net/hit` caller branches on a provider's own error type
+without re-parsing the body. The same Go feature is what makes
+`hit.Client[E].GET[Out]` possible. Interface methods still cannot have type
+parameters, so these are concrete methods on `*Error`.
+
 ## Building SDKs with `net/hit`
 
-`hit` returns these same values. An `hit.ErrorMap` maps an upstream's statuses
-and typed error bodies onto factories. The resulting `*errs.Error` knows its
+`hit` returns these same values. Every request states two schemas, response
+`Out` and error `E`. A `hit.Client[E]` holds one provider's shared
+configuration and error schema, and its `Classify` and `ErrorMap` map typed
+error bodies and statuses onto factories. The resulting `*errs.Error` knows its
 retry policy and what the caller can do, and it keeps the provider's status,
 body, error type and request id server-side on `errs.Upstream`. That makes a
 provider client a few declarations instead of an imported SDK. See

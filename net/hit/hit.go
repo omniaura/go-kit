@@ -22,8 +22,13 @@ import (
 
 var defaultFlights singleflight.Group
 
-// Request is an HTTP request builder. Out is the expected JSON response type.
-type Request[Out any] struct {
+// Request is an HTTP request builder with two schemas: Out is the JSON body of
+// a 2xx response and E is the JSON body of an error response. Every request
+// states both, so a caller can never forget that a provider's failures have a
+// shape too. E is decoded on every non-2xx response, handed to Classify, and
+// kept server-side on the returned *errs.Error (errs.Error.UpstreamAs[E]).
+// Use AnyError when an endpoint has no documented error shape.
+type Request[Out, E any] struct {
 	method        string
 	url           string
 	baseURL       string
@@ -50,11 +55,16 @@ type Request[Out any] struct {
 	retrySet      bool
 	statusRetries errs.StatusRetryPolicy
 	errorMap      *ErrorMap
+	classify      func(status int, body E, header http.Header) (Classified, bool)
 	service       string
 }
 
-func newRequest[Out any](method, rawURL string, cacheable bool) *Request[Out] {
-	return &Request[Out]{
+// AnyError is the error schema for endpoints without a documented error
+// shape: any JSON body decodes into it, and the raw bytes stay on the error.
+type AnyError = json.RawMessage
+
+func newRequest[Out, E any](method, rawURL string, cacheable bool) *Request[Out, E] {
+	return &Request[Out, E]{
 		method:    method,
 		url:       rawURL,
 		queries:   make(url.Values),
@@ -68,38 +78,38 @@ func defaultCacheable(method string) bool {
 }
 
 // GET creates a GET request builder.
-func GET[Out any](rawURL string) *Request[Out] {
-	return newRequest[Out](http.MethodGet, rawURL, true)
+func GET[Out, E any](rawURL string) *Request[Out, E] {
+	return newRequest[Out, E](http.MethodGet, rawURL, true)
 }
 
 // POST creates a POST request builder.
-func POST[Out any](rawURL string) *Request[Out] {
-	return newRequest[Out](http.MethodPost, rawURL, false)
+func POST[Out, E any](rawURL string) *Request[Out, E] {
+	return newRequest[Out, E](http.MethodPost, rawURL, false)
 }
 
 // PUT creates a PUT request builder.
-func PUT[Out any](rawURL string) *Request[Out] {
-	return newRequest[Out](http.MethodPut, rawURL, false)
+func PUT[Out, E any](rawURL string) *Request[Out, E] {
+	return newRequest[Out, E](http.MethodPut, rawURL, false)
 }
 
 // PATCH creates a PATCH request builder.
-func PATCH[Out any](rawURL string) *Request[Out] {
-	return newRequest[Out](http.MethodPatch, rawURL, false)
+func PATCH[Out, E any](rawURL string) *Request[Out, E] {
+	return newRequest[Out, E](http.MethodPatch, rawURL, false)
 }
 
 // DELETE creates a DELETE request builder.
-func DELETE[Out any](rawURL string) *Request[Out] {
-	return newRequest[Out](http.MethodDelete, rawURL, false)
+func DELETE[Out, E any](rawURL string) *Request[Out, E] {
+	return newRequest[Out, E](http.MethodDelete, rawURL, false)
 }
 
-func (r *Request[Out]) setBuildErr(err error) {
+func (r *Request[Out, E]) setBuildErr(err error) {
 	if err != nil && r.buildErr == nil {
 		r.buildErr = err
 	}
 }
 
 // Method sets the HTTP method.
-func (r *Request[Out]) Method(method string) *Request[Out] {
+func (r *Request[Out, E]) Method(method string) *Request[Out, E] {
 	r.method = method
 	if !r.cacheableSet {
 		r.cacheable = defaultCacheable(method)
@@ -111,12 +121,12 @@ func (r *Request[Out]) Method(method string) *Request[Out] {
 }
 
 // WithMethod sets the HTTP method.
-func (r *Request[Out]) WithMethod(method string) *Request[Out] {
+func (r *Request[Out, E]) WithMethod(method string) *Request[Out, E] {
 	return r.Method(method)
 }
 
 // URL sets the request URL, overriding base URL and path.
-func (r *Request[Out]) URL(rawURL string) *Request[Out] {
+func (r *Request[Out, E]) URL(rawURL string) *Request[Out, E] {
 	r.url = rawURL
 	r.baseURL = ""
 	r.path = ""
@@ -124,24 +134,24 @@ func (r *Request[Out]) URL(rawURL string) *Request[Out] {
 }
 
 // WithURL sets the request URL, overriding base URL and path.
-func (r *Request[Out]) WithURL(rawURL string) *Request[Out] {
+func (r *Request[Out, E]) WithURL(rawURL string) *Request[Out, E] {
 	return r.URL(rawURL)
 }
 
 // BaseURL sets the base URL for Path composition.
-func (r *Request[Out]) BaseURL(base string) *Request[Out] {
+func (r *Request[Out, E]) BaseURL(base string) *Request[Out, E] {
 	r.baseURL = base
 	r.url = ""
 	return r
 }
 
 // WithBaseURL sets the base URL for Path composition.
-func (r *Request[Out]) WithBaseURL(base string) *Request[Out] {
+func (r *Request[Out, E]) WithBaseURL(base string) *Request[Out, E] {
 	return r.BaseURL(base)
 }
 
 // Path sets the request path for BaseURL composition.
-func (r *Request[Out]) Path(path string) *Request[Out] {
+func (r *Request[Out, E]) Path(path string) *Request[Out, E] {
 	if r.url != "" && r.baseURL == "" {
 		r.baseURL = r.url
 	}
@@ -151,23 +161,23 @@ func (r *Request[Out]) Path(path string) *Request[Out] {
 }
 
 // WithPath sets the request path for BaseURL composition.
-func (r *Request[Out]) WithPath(path string) *Request[Out] {
+func (r *Request[Out, E]) WithPath(path string) *Request[Out, E] {
 	return r.Path(path)
 }
 
 // Query adds a query parameter.
-func (r *Request[Out]) Query(key, value string) *Request[Out] {
+func (r *Request[Out, E]) Query(key, value string) *Request[Out, E] {
 	r.queries.Add(key, value)
 	return r
 }
 
 // WithQuery adds a query parameter.
-func (r *Request[Out]) WithQuery(key, value string) *Request[Out] {
+func (r *Request[Out, E]) WithQuery(key, value string) *Request[Out, E] {
 	return r.Query(key, value)
 }
 
 // Queries adds multiple query parameters.
-func (r *Request[Out]) Queries(queries map[string]string) *Request[Out] {
+func (r *Request[Out, E]) Queries(queries map[string]string) *Request[Out, E] {
 	for k, v := range queries {
 		r.queries.Add(k, v)
 	}
@@ -175,23 +185,23 @@ func (r *Request[Out]) Queries(queries map[string]string) *Request[Out] {
 }
 
 // WithQueries adds multiple query parameters.
-func (r *Request[Out]) WithQueries(queries map[string]string) *Request[Out] {
+func (r *Request[Out, E]) WithQueries(queries map[string]string) *Request[Out, E] {
 	return r.Queries(queries)
 }
 
 // Header adds a request header.
-func (r *Request[Out]) Header(key, value string) *Request[Out] {
+func (r *Request[Out, E]) Header(key, value string) *Request[Out, E] {
 	r.headers.Add(key, value)
 	return r
 }
 
 // WithHeader adds a request header.
-func (r *Request[Out]) WithHeader(key, value string) *Request[Out] {
+func (r *Request[Out, E]) WithHeader(key, value string) *Request[Out, E] {
 	return r.Header(key, value)
 }
 
 // Headers adds request headers from key/value pairs.
-func (r *Request[Out]) Headers(pairs ...string) *Request[Out] {
+func (r *Request[Out, E]) Headers(pairs ...string) *Request[Out, E] {
 	if len(pairs)%2 != 0 {
 		r.setBuildErr(fmt.Errorf("headers requires key/value pairs"))
 		return r
@@ -203,7 +213,7 @@ func (r *Request[Out]) Headers(pairs ...string) *Request[Out] {
 }
 
 // WithHeaders adds multiple request headers.
-func (r *Request[Out]) WithHeaders(headers map[string]string) *Request[Out] {
+func (r *Request[Out, E]) WithHeaders(headers map[string]string) *Request[Out, E] {
 	for k, v := range headers {
 		r.headers.Add(k, v)
 	}
@@ -211,29 +221,29 @@ func (r *Request[Out]) WithHeaders(headers map[string]string) *Request[Out] {
 }
 
 // Body sets the raw request body.
-func (r *Request[Out]) Body(body []byte) *Request[Out] {
+func (r *Request[Out, E]) Body(body []byte) *Request[Out, E] {
 	r.body = cloneBytes(body)
 	return r
 }
 
 // WithBody sets the raw request body.
-func (r *Request[Out]) WithBody(body []byte) *Request[Out] {
+func (r *Request[Out, E]) WithBody(body []byte) *Request[Out, E] {
 	return r.Body(body)
 }
 
 // BodyString sets the request body from a string.
-func (r *Request[Out]) BodyString(body string) *Request[Out] {
+func (r *Request[Out, E]) BodyString(body string) *Request[Out, E] {
 	r.body = []byte(body)
 	return r
 }
 
 // WithBodyString sets the request body from a string.
-func (r *Request[Out]) WithBodyString(body string) *Request[Out] {
+func (r *Request[Out, E]) WithBodyString(body string) *Request[Out, E] {
 	return r.BodyString(body)
 }
 
 // BodyReader reads the provided reader and sets it as the request body.
-func (r *Request[Out]) BodyReader(reader io.Reader) *Request[Out] {
+func (r *Request[Out, E]) BodyReader(reader io.Reader) *Request[Out, E] {
 	if reader == nil {
 		r.body = nil
 		return r
@@ -248,12 +258,12 @@ func (r *Request[Out]) BodyReader(reader io.Reader) *Request[Out] {
 }
 
 // WithBodyReader reads the provided reader and sets it as the request body.
-func (r *Request[Out]) WithBodyReader(reader io.Reader) *Request[Out] {
+func (r *Request[Out, E]) WithBodyReader(reader io.Reader) *Request[Out, E] {
 	return r.BodyReader(reader)
 }
 
 // JSON marshals v as JSON and sets Content-Type to application/json.
-func (r *Request[Out]) JSON(v any) *Request[Out] {
+func (r *Request[Out, E]) JSON(v any) *Request[Out, E] {
 	if v == nil {
 		r.body = nil
 		return r
@@ -269,12 +279,12 @@ func (r *Request[Out]) JSON(v any) *Request[Out] {
 }
 
 // WithJSON marshals v as JSON and sets Content-Type to application/json.
-func (r *Request[Out]) WithJSON(v any) *Request[Out] {
+func (r *Request[Out, E]) WithJSON(v any) *Request[Out, E] {
 	return r.JSON(v)
 }
 
 // BodyFS reads the named file from fsys and sets it as the request body.
-func (r *Request[Out]) BodyFS(fsys fs.FS, name string) *Request[Out] {
+func (r *Request[Out, E]) BodyFS(fsys fs.FS, name string) *Request[Out, E] {
 	body, err := fs.ReadFile(fsys, name)
 	if err != nil {
 		r.setBuildErr(err)
@@ -285,34 +295,34 @@ func (r *Request[Out]) BodyFS(fsys fs.FS, name string) *Request[Out] {
 }
 
 // WithBodyFS reads the named file from fsys and sets it as the request body.
-func (r *Request[Out]) WithBodyFS(fsys fs.FS, name string) *Request[Out] {
+func (r *Request[Out, E]) WithBodyFS(fsys fs.FS, name string) *Request[Out, E] {
 	return r.BodyFS(fsys, name)
 }
 
 // Timeout sets the request timeout.
-func (r *Request[Out]) Timeout(d time.Duration) *Request[Out] {
+func (r *Request[Out, E]) Timeout(d time.Duration) *Request[Out, E] {
 	r.timeout = d
 	return r
 }
 
 // WithTimeout sets the request timeout.
-func (r *Request[Out]) WithTimeout(d time.Duration) *Request[Out] {
+func (r *Request[Out, E]) WithTimeout(d time.Duration) *Request[Out, E] {
 	return r.Timeout(d)
 }
 
 // Client overrides the default HTTP client.
-func (r *Request[Out]) Client(c *http.Client) *Request[Out] {
+func (r *Request[Out, E]) Client(c *http.Client) *Request[Out, E] {
 	r.client = c
 	return r
 }
 
 // WithClient overrides the default HTTP client.
-func (r *Request[Out]) WithClient(c *http.Client) *Request[Out] {
+func (r *Request[Out, E]) WithClient(c *http.Client) *Request[Out, E] {
 	return r.Client(c)
 }
 
 // Fallback sets a static fallback response.
-func (r *Request[Out]) Fallback(v any) *Request[Out] {
+func (r *Request[Out, E]) Fallback(v any) *Request[Out, E] {
 	if v == nil {
 		r.fallback = nil
 		return r
@@ -327,12 +337,12 @@ func (r *Request[Out]) Fallback(v any) *Request[Out] {
 }
 
 // WithFallback sets a static fallback response.
-func (r *Request[Out]) WithFallback(v any) *Request[Out] {
+func (r *Request[Out, E]) WithFallback(v any) *Request[Out, E] {
 	return r.Fallback(v)
 }
 
 // FallbackFile reads the fallback response from a local file.
-func (r *Request[Out]) FallbackFile(path string) *Request[Out] {
+func (r *Request[Out, E]) FallbackFile(path string) *Request[Out, E] {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		r.setBuildErr(err)
@@ -343,12 +353,12 @@ func (r *Request[Out]) FallbackFile(path string) *Request[Out] {
 }
 
 // WithFallbackFile reads the fallback response from a local file.
-func (r *Request[Out]) WithFallbackFile(path string) *Request[Out] {
+func (r *Request[Out, E]) WithFallbackFile(path string) *Request[Out, E] {
 	return r.FallbackFile(path)
 }
 
 // FallbackFS reads the fallback response from the provided filesystem.
-func (r *Request[Out]) FallbackFS(fsys fs.FS, name string) *Request[Out] {
+func (r *Request[Out, E]) FallbackFS(fsys fs.FS, name string) *Request[Out, E] {
 	body, err := fs.ReadFile(fsys, name)
 	if err != nil {
 		r.setBuildErr(err)
@@ -359,12 +369,12 @@ func (r *Request[Out]) FallbackFS(fsys fs.FS, name string) *Request[Out] {
 }
 
 // WithFallbackFS reads the fallback response from the provided filesystem.
-func (r *Request[Out]) WithFallbackFS(fsys fs.FS, name string) *Request[Out] {
+func (r *Request[Out, E]) WithFallbackFS(fsys fs.FS, name string) *Request[Out, E] {
 	return r.FallbackFS(fsys, name)
 }
 
 // Cache sets the cache backend.
-func (r *Request[Out]) Cache(cache Cache) *Request[Out] {
+func (r *Request[Out, E]) Cache(cache Cache) *Request[Out, E] {
 	r.cache = cache
 	if !r.coalesceSet {
 		r.coalesce = cache != nil && r.cacheable
@@ -373,40 +383,40 @@ func (r *Request[Out]) Cache(cache Cache) *Request[Out] {
 }
 
 // WithCache sets the cache backend.
-func (r *Request[Out]) WithCache(cache Cache) *Request[Out] {
+func (r *Request[Out, E]) WithCache(cache Cache) *Request[Out, E] {
 	return r.Cache(cache)
 }
 
 // CacheKey overrides the derived cache key.
-func (r *Request[Out]) CacheKey(key string) *Request[Out] {
+func (r *Request[Out, E]) CacheKey(key string) *Request[Out, E] {
 	r.cacheKey = key
 	return r
 }
 
 // WithCacheKey overrides the derived cache key.
-func (r *Request[Out]) WithCacheKey(key string) *Request[Out] {
+func (r *Request[Out, E]) WithCacheKey(key string) *Request[Out, E] {
 	return r.CacheKey(key)
 }
 
 // CacheSWR enables stale-while-revalidate reads when the cache supports it.
-func (r *Request[Out]) CacheSWR() *Request[Out] {
+func (r *Request[Out, E]) CacheSWR() *Request[Out, E] {
 	r.cacheSWR = true
 	return r
 }
 
 // WithCacheSWR enables stale-while-revalidate reads when the cache supports it.
-func (r *Request[Out]) WithCacheSWR() *Request[Out] {
+func (r *Request[Out, E]) WithCacheSWR() *Request[Out, E] {
 	return r.CacheSWR()
 }
 
 // Key appends cache-key dimensions such as Header, BodyHash, or Field.
-func (r *Request[Out]) Key(parts ...KeyPart) *Request[Out] {
+func (r *Request[Out, E]) Key(parts ...KeyPart) *Request[Out, E] {
 	r.keyParts = append(r.keyParts, parts...)
 	return r
 }
 
 // Cacheable toggles whether the request may use cache.
-func (r *Request[Out]) Cacheable(v bool) *Request[Out] {
+func (r *Request[Out, E]) Cacheable(v bool) *Request[Out, E] {
 	r.cacheable = v
 	r.cacheableSet = true
 	if !r.coalesceSet {
@@ -416,19 +426,19 @@ func (r *Request[Out]) Cacheable(v bool) *Request[Out] {
 }
 
 // Retry configures a fallback retry policy for request errors.
-func (r *Request[Out]) Retry(policy errs.RetryPolicy) *Request[Out] {
+func (r *Request[Out, E]) Retry(policy errs.RetryPolicy) *Request[Out, E] {
 	r.retryPolicy = policy
 	r.retrySet = true
 	return r
 }
 
 // WithRetryPolicy configures a fallback retry policy for request errors.
-func (r *Request[Out]) WithRetryPolicy(policy errs.RetryPolicy) *Request[Out] {
+func (r *Request[Out, E]) WithRetryPolicy(policy errs.RetryPolicy) *Request[Out, E] {
 	return r.Retry(policy)
 }
 
 // StatusRetry configures retry metadata for a specific HTTP status code.
-func (r *Request[Out]) StatusRetry(status int, policy errs.RetryPolicy) *Request[Out] {
+func (r *Request[Out, E]) StatusRetry(status int, policy errs.RetryPolicy) *Request[Out, E] {
 	if r.statusRetries == nil {
 		r.statusRetries = make(errs.StatusRetryPolicy)
 	}
@@ -437,12 +447,12 @@ func (r *Request[Out]) StatusRetry(status int, policy errs.RetryPolicy) *Request
 }
 
 // WithStatusRetry configures retry metadata for a specific HTTP status code.
-func (r *Request[Out]) WithStatusRetry(status int, policy errs.RetryPolicy) *Request[Out] {
+func (r *Request[Out, E]) WithStatusRetry(status int, policy errs.RetryPolicy) *Request[Out, E] {
 	return r.StatusRetry(status, policy)
 }
 
 // StatusRetryPolicy configures status-code retry metadata.
-func (r *Request[Out]) StatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out] {
+func (r *Request[Out, E]) StatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out, E] {
 	if len(policy) == 0 {
 		r.statusRetries = nil
 		return r
@@ -454,50 +464,58 @@ func (r *Request[Out]) StatusRetryPolicy(policy errs.StatusRetryPolicy) *Request
 	return r
 }
 
+// Classify picks the factory for an error response from its decoded body.
+// It runs before the ErrorMap's status mapping; returning false (optionally
+// with a Code) falls through to it. Bodies that do not decode as E skip it.
+func (r *Request[Out, E]) Classify(fn func(status int, body E, header http.Header) (Classified, bool)) *Request[Out, E] {
+	r.classify = fn
+	return r
+}
+
 // Errors maps this request's failures to typed errors; see ErrorMap.
-func (r *Request[Out]) Errors(m ErrorMap) *Request[Out] {
+func (r *Request[Out, E]) Errors(m ErrorMap) *Request[Out, E] {
 	r.errorMap = &m
 	return r
 }
 
 // Service names the upstream on error records when no ErrorMap names it.
-func (r *Request[Out]) Service(name string) *Request[Out] {
+func (r *Request[Out, E]) Service(name string) *Request[Out, E] {
 	r.service = name
 	return r
 }
 
 // WithStatusRetryPolicy configures status-code retry metadata.
-func (r *Request[Out]) WithStatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out] {
+func (r *Request[Out, E]) WithStatusRetryPolicy(policy errs.StatusRetryPolicy) *Request[Out, E] {
 	return r.StatusRetryPolicy(policy)
 }
 
 // Coalesce toggles duplicate concurrent request suppression.
 // Cached requests coalesce by default; uncached requests do not.
-func (r *Request[Out]) Coalesce(v bool) *Request[Out] {
+func (r *Request[Out, E]) Coalesce(v bool) *Request[Out, E] {
 	r.coalesce = v
 	r.coalesceSet = true
 	return r
 }
 
 // Group sets the singleflight group used for request coalescing.
-func (r *Request[Out]) Group(group *singleflight.Group) *Request[Out] {
+func (r *Request[Out, E]) Group(group *singleflight.Group) *Request[Out, E] {
 	r.group = group
 	return r
 }
 
 // Rate sets a blocking request rate limiter.
-func (r *Request[Out]) Rate(limiter RateLimiter) *Request[Out] {
+func (r *Request[Out, E]) Rate(limiter RateLimiter) *Request[Out, E] {
 	r.limiter = limiter
 	return r
 }
 
 // Gate sets a concurrency gate.
-func (r *Request[Out]) Gate(gate Gate) *Request[Out] {
+func (r *Request[Out, E]) Gate(gate Gate) *Request[Out, E] {
 	r.gate = gate
 	return r
 }
 
-func (r *Request[Out]) buildURL() (string, error) {
+func (r *Request[Out, E]) buildURL() (string, error) {
 	var raw string
 	if r.url != "" {
 		raw = r.url
@@ -523,7 +541,7 @@ func (r *Request[Out]) buildURL() (string, error) {
 	return u.String(), nil
 }
 
-func (r *Request[Out]) newHTTPRequest(ctx context.Context) (*http.Request, context.CancelFunc, error) {
+func (r *Request[Out, E]) newHTTPRequest(ctx context.Context) (*http.Request, context.CancelFunc, error) {
 	if r.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.timeout)
@@ -541,7 +559,7 @@ func (r *Request[Out]) newHTTPRequest(ctx context.Context) (*http.Request, conte
 	return req, func() {}, nil
 }
 
-func (r *Request[Out]) requestWithContext(ctx context.Context) (*http.Request, error) {
+func (r *Request[Out, E]) requestWithContext(ctx context.Context) (*http.Request, error) {
 	u, err := r.buildURL()
 	if err != nil {
 		return nil, err
@@ -561,7 +579,7 @@ func (r *Request[Out]) requestWithContext(ctx context.Context) (*http.Request, e
 	return req, nil
 }
 
-func (r *Request[Out]) cacheKeyValue(ctx context.Context, req *http.Request) (string, error) {
+func (r *Request[Out, E]) cacheKeyValue(ctx context.Context, req *http.Request) (string, error) {
 	if r.cacheKey != "" {
 		return r.cacheKey, nil
 	}
@@ -582,7 +600,7 @@ func (r *Request[Out]) cacheKeyValue(ctx context.Context, req *http.Request) (st
 	return b.String(), nil
 }
 
-func (r *Request[Out]) httpClient() *http.Client {
+func (r *Request[Out, E]) httpClient() *http.Client {
 	if r.client != nil {
 		return r.client
 	}
@@ -590,7 +608,7 @@ func (r *Request[Out]) httpClient() *http.Client {
 }
 
 // Do executes the request and decodes the JSON response into out.
-func (r *Request[Out]) Do(ctx context.Context, out *Out) error {
+func (r *Request[Out, E]) Do(ctx context.Context, out *Out) error {
 	if out == nil {
 		return errs.AsError(ctx, fmt.Errorf("output pointer is nil"))
 	}
@@ -640,7 +658,7 @@ func (r *Request[Out]) Do(ctx context.Context, out *Out) error {
 	return r.decode(ctx, out, body)
 }
 
-func (r *Request[Out]) loadBytes(ctx context.Context, key string) ([]byte, error) {
+func (r *Request[Out, E]) loadBytes(ctx context.Context, key string) ([]byte, error) {
 	if !r.coalesce {
 		return r.fetchAndCache(ctx, key)
 	}
@@ -675,7 +693,7 @@ func (r *Request[Out]) loadBytes(ctx context.Context, key string) ([]byte, error
 	}
 }
 
-func (r *Request[Out]) fetchAndCache(ctx context.Context, key string) ([]byte, error) {
+func (r *Request[Out, E]) fetchAndCache(ctx context.Context, key string) ([]byte, error) {
 	body, err := r.executeBytesWithRetry(ctx)
 	if err != nil {
 		return nil, err
@@ -691,7 +709,7 @@ func (r *Request[Out]) fetchAndCache(ctx context.Context, key string) ([]byte, e
 	return body, nil
 }
 
-func (r *Request[Out]) wait(ctx context.Context) (func(), error) {
+func (r *Request[Out, E]) wait(ctx context.Context) (func(), error) {
 	if r.limiter != nil {
 		if err := r.limiter.Wait(ctx); err != nil {
 			return nil, err
@@ -706,7 +724,7 @@ func (r *Request[Out]) wait(ctx context.Context) (func(), error) {
 	return r.gate.Release, nil
 }
 
-func (r *Request[Out]) executeBytesWithRetry(ctx context.Context) ([]byte, error) {
+func (r *Request[Out, E]) executeBytesWithRetry(ctx context.Context) ([]byte, error) {
 	for attempt := 1; ; attempt++ {
 		release, err := r.wait(ctx)
 		if err != nil {
@@ -737,7 +755,7 @@ func (r *Request[Out]) executeBytesWithRetry(ctx context.Context) ([]byte, error
 	}
 }
 
-func (r *Request[Out]) executeBytes(req *http.Request) ([]byte, error) {
+func (r *Request[Out, E]) executeBytes(req *http.Request) ([]byte, error) {
 	started := time.Now()
 	rsp, err := r.httpClient().Do(req)
 	if err != nil {
@@ -755,7 +773,7 @@ func (r *Request[Out]) executeBytes(req *http.Request) ([]byte, error) {
 	return body, nil
 }
 
-func (r *Request[Out]) serviceName(req *http.Request) string {
+func (r *Request[Out, E]) serviceName(req *http.Request) string {
 	if r.errorMap != nil && r.errorMap.Service != "" {
 		return r.errorMap.Service
 	}
@@ -767,7 +785,7 @@ func (r *Request[Out]) serviceName(req *http.Request) string {
 
 // transportError is a call that got no usable response: dial, TLS, timeout or
 // a body cut short. The request's own retry policy applies.
-func (r *Request[Out]) transportError(req *http.Request, err error, took time.Duration) *errs.Error {
+func (r *Request[Out, E]) transportError(req *http.Request, err error, took time.Duration) *errs.Error {
 	ctx := req.Context()
 	if errors.Is(err, context.Canceled) {
 		// The caller gave up; that is not an upstream failure. A deadline is
@@ -788,7 +806,7 @@ func (r *Request[Out]) transportError(req *http.Request, err error, took time.Du
 	return e
 }
 
-func (r *Request[Out]) error(ctx context.Context, err error) *errs.Error {
+func (r *Request[Out, E]) error(ctx context.Context, err error) *errs.Error {
 	e := errs.AsError(ctx, err)
 	if r.retrySet {
 		e.WithRetryPolicy(r.retryPolicy)
@@ -799,11 +817,29 @@ func (r *Request[Out]) error(ctx context.Context, err error) *errs.Error {
 // statusError maps a non-2xx response through the ErrorMap. The client-facing
 // part comes from the chosen factory; the upstream's status, body, headers and
 // own error code are kept server-side.
-func (r *Request[Out]) statusError(req *http.Request, rsp *http.Response, body []byte, took time.Duration) *errs.Error {
+func (r *Request[Out, E]) statusError(req *http.Request, rsp *http.Response, body []byte, took time.Duration) *errs.Error {
 	ctx := req.Context()
-	view := Response{Status: rsp.StatusCode, Header: rsp.Header, Body: body}
-	factory, providerCode := r.errorMap.factoryFor(view)
-	e := factory.New(ctx).Upstream(errs.Upstream{
+	var (
+		decoded      E
+		hasDecoded   bool
+		factory      errs.ErrorFactory
+		providerCode string
+		classified   bool
+	)
+	if len(body) > 0 && json.Unmarshal(body, &decoded) == nil {
+		hasDecoded = true
+		if r.classify != nil {
+			var c Classified
+			c, classified = r.classify(rsp.StatusCode, decoded, rsp.Header)
+			providerCode = c.Code
+			classified = classified && isSet(c.Factory)
+			factory = c.Factory
+		}
+	}
+	if !classified {
+		factory = r.errorMap.factoryFor(rsp.StatusCode)
+	}
+	upstream := errs.Upstream{
 		Service:  r.serviceName(req),
 		Method:   req.Method,
 		URL:      redactURL(req.URL),
@@ -812,7 +848,11 @@ func (r *Request[Out]) statusError(req *http.Request, rsp *http.Response, body [
 		Code:     providerCode,
 		Header:   r.errorMap.keptHeaders(rsp.Header),
 		Duration: took,
-	})
+	}
+	if hasDecoded {
+		upstream.Decoded = decoded
+	}
+	e := factory.New(ctx).Upstream(upstream)
 	if after := parseRetryAfter(rsp.Header.Get("Retry-After"), time.Now()); after > 0 {
 		e.RetryAfter(after)
 	}
@@ -824,7 +864,7 @@ func (r *Request[Out]) statusError(req *http.Request, rsp *http.Response, body [
 
 // retryPolicyForStatus: a per-status policy on the request wins, then the
 // factory's own declared policy, then the request's fallback policy.
-func (r *Request[Out]) retryPolicyForStatus(status int, factory errs.ErrorFactory) (errs.RetryPolicy, bool) {
+func (r *Request[Out, E]) retryPolicyForStatus(status int, factory errs.ErrorFactory) (errs.RetryPolicy, bool) {
 	if policy, ok := r.statusRetries.ForStatus(status); ok {
 		return policy, true
 	}
@@ -837,7 +877,7 @@ func (r *Request[Out]) retryPolicyForStatus(status int, factory errs.ErrorFactor
 	return errs.RetryPolicy{}, false
 }
 
-func (r *Request[Out]) validate(ctx context.Context, body []byte) error {
+func (r *Request[Out, E]) validate(ctx context.Context, body []byte) error {
 	if len(body) == 0 {
 		return nil
 	}
@@ -848,7 +888,7 @@ func (r *Request[Out]) validate(ctx context.Context, body []byte) error {
 	return nil
 }
 
-func (r *Request[Out]) decode(ctx context.Context, out *Out, body []byte) error {
+func (r *Request[Out, E]) decode(ctx context.Context, out *Out, body []byte) error {
 	if len(body) == 0 {
 		return nil
 	}
@@ -858,7 +898,7 @@ func (r *Request[Out]) decode(ctx context.Context, out *Out, body []byte) error 
 	return nil
 }
 
-func (r *Request[Out]) fail(ctx context.Context, out *Out, err error) error {
+func (r *Request[Out, E]) fail(ctx context.Context, out *Out, err error) error {
 	if len(r.fallback) == 0 {
 		return err
 	}

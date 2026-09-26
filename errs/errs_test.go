@@ -247,3 +247,30 @@ func TestClientGoneDuringWriteIsNotAFault(t *testing.T) {
 		t.Fatalf("a hung-up client should not be recorded: %+v", got)
 	}
 }
+
+func TestGenericAccessors(t *testing.T) {
+	type providerErr struct{ Type string }
+	e := errs.Unknown.New(context.Background()).
+		AddAttrs(errs.String("user_id", "u1"), errs.Int("attempt", 1), errs.Int("attempt", 2)).
+		Upstream(errs.Upstream{Service: "p", Decoded: providerErr{Type: "overloaded"}})
+
+	if id, ok := e.AttrAs[string]("user_id"); !ok || id != "u1" {
+		t.Fatalf("AttrAs[string] = %q, %v", id, ok)
+	}
+	if n, ok := e.AttrAs[int]("attempt"); !ok || n != 2 {
+		t.Fatalf("AttrAs returns the latest value, got %d, %v", n, ok)
+	}
+	if _, ok := e.AttrAs[int]("user_id"); ok {
+		t.Fatal("AttrAs must not convert across types")
+	}
+	if b, ok := e.UpstreamAs[providerErr](); !ok || b.Type != "overloaded" {
+		t.Fatalf("UpstreamAs = %+v, %v", b, ok)
+	}
+	if _, ok := e.UpstreamAs[string](); ok {
+		t.Fatal("UpstreamAs with the wrong schema must report false")
+	}
+	var nilErr *errs.Error
+	if _, ok := nilErr.UpstreamAs[providerErr](); ok {
+		t.Fatal("nil error")
+	}
+}
