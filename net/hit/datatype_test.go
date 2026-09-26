@@ -118,8 +118,8 @@ func TestDataTypeRoundTrips(t *testing.T) {
 			t.Fatalf("%s unmarshal: %v", tc.dt.ContentType(), err)
 		}
 	}
-	if _, err := hit.Form.Marshal(struct{}{}); err == nil {
-		t.Fatal("Form must reject types it cannot encode")
+	if _, err := hit.Form.Marshal(42); err == nil {
+		t.Fatal("Form must reject values that are not maps, url.Values or structs")
 	}
 }
 
