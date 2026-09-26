@@ -91,3 +91,38 @@ func TestStatusRetryPolicy(t *testing.T) {
 		t.Fatal("did not expect policy for 404")
 	}
 }
+
+func TestRetryPolicyNextHonoursRetryAfter(t *testing.T) {
+	ctx := context.Background()
+	policy := errs.ExponentialRetry(3, 10*time.Millisecond, time.Second)
+	policy.MaxRetryAfter = 2 * time.Second
+	slow := errs.NewFactory(http.StatusServiceUnavailable, "busy").New(ctx)
+
+	if d, ok := policy.Next(1, slow); !ok || d != 10*time.Millisecond {
+		t.Fatalf("without a hint the backoff applies, got %s %v", d, ok)
+	}
+	slow.RetryAfter(time.Second)
+	if d, ok := policy.Next(1, slow); !ok || d != time.Second {
+		t.Fatalf("a longer hint wins, got %s %v", d, ok)
+	}
+	slow.RetryAfter(time.Minute)
+	if _, ok := policy.Next(1, slow); ok {
+		t.Fatal("a hint beyond MaxRetryAfter should stop the loop")
+	}
+	if _, ok := policy.Next(3, slow); ok {
+		t.Fatal("attempts are still bounded")
+	}
+}
+
+func TestTransientStatusRetry(t *testing.T) {
+	table := errs.TransientStatusRetry(errs.FixedRetry(3, time.Millisecond)).
+		With(http.StatusConflict, errs.FixedRetry(5, time.Second))
+	for _, status := range []int{429, 503, 409} {
+		if p, ok := table.ForStatus(status); !ok || !p.Retryable {
+			t.Fatalf("status %d should retry: %+v", status, p)
+		}
+	}
+	if _, ok := table.ForStatus(http.StatusBadRequest); ok {
+		t.Fatal("400 is not transient")
+	}
+}

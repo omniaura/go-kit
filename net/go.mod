@@ -1,8 +1,6 @@
 module github.com/omniaura/go-kit/net
 
-go 1.25.5
-
-toolchain go1.26.1
+go 1.27
 
 require (
 	github.com/redis/go-redis/v9 v9.21.0

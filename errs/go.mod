@@ -1,10 +1,11 @@
 module github.com/omniaura/go-kit/errs
 
-go 1.25.5
+go 1.27
 
-toolchain go1.26.1
-
-require github.com/rs/zerolog v1.34.0
+require (
+	github.com/rs/xid v1.6.0
+	github.com/rs/zerolog v1.34.0
+)
 
 require (
 	github.com/mattn/go-colorable v0.1.13 // indirect

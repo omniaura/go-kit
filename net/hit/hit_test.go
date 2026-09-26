@@ -45,7 +45,7 @@ func TestGET_JSON(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL+"/things").
+	err := hit.GET[hit.AnyError](server.URL+"/things").
 		WithHeader("Accept", "application/json").
 		WithTimeout(5*time.Second).
 		Do(context.Background(), &out)
@@ -69,7 +69,7 @@ func TestGET_QueryParams(t *testing.T) {
 	defer server.Close()
 
 	var out map[string]string
-	err := hit.GET[map[string]string](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithQuery("a", "1").
 		WithQueries(map[string]string{"b": "2"}).
 		Do(context.Background(), &out)
@@ -101,7 +101,7 @@ func TestPOST_JSON(t *testing.T) {
 
 	reqBody := testItem{ID: 10, Name: "input"}
 	var resp testItem
-	err := hit.POST[testItem](server.URL).
+	err := hit.POST[hit.AnyError](server.URL).
 		WithJSON(&reqBody).
 		Do(context.Background(), &resp)
 	if err != nil {
@@ -129,7 +129,7 @@ func TestPOST_NotCacheableByDefault(t *testing.T) {
 	var out testItem
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		err := hit.POST[testItem](server.URL).
+		err := hit.POST[hit.AnyError](server.URL).
 			WithCache(cache).
 			Do(ctx, &out)
 		if err != nil {
@@ -158,7 +158,7 @@ func TestPOST_CacheableOptIn(t *testing.T) {
 	var out testItem
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		err := hit.POST[testItem](server.URL).
+		err := hit.POST[hit.AnyError](server.URL).
 			WithCache(cache).
 			Cacheable(true).
 			Do(ctx, &out)
@@ -191,7 +191,7 @@ func TestGET_CacheDefault(t *testing.T) {
 	var out testItem
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		err := hit.GET[testItem](server.URL).
+		err := hit.GET[hit.AnyError](server.URL).
 			WithCache(cache).
 			Do(ctx, &out)
 		if err != nil {
@@ -223,7 +223,7 @@ func TestGET_WithCacheKey(t *testing.T) {
 	var out testItem
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		err := hit.GET[testItem](server.URL).
+		err := hit.GET[hit.AnyError](server.URL).
 			WithCache(cache).
 			WithCacheKey("custom-key").
 			Do(ctx, &out)
@@ -263,7 +263,7 @@ func TestGET_CacheSWR(t *testing.T) {
 
 	ctx := context.Background()
 	var out testItem
-	if err := hit.GET[testItem](server.URL).
+	if err := hit.GET[hit.AnyError](server.URL).
 		WithCache(cache).
 		WithCacheSWR().
 		Do(ctx, &out); err != nil {
@@ -276,7 +276,7 @@ func TestGET_CacheSWR(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 
 	out = testItem{}
-	if err := hit.GET[testItem](server.URL).
+	if err := hit.GET[hit.AnyError](server.URL).
 		WithCache(cache).
 		WithCacheSWR().
 		Do(ctx, &out); err != nil {
@@ -295,7 +295,7 @@ func TestGET_CacheSWR(t *testing.T) {
 
 	for range 20 {
 		out = testItem{}
-		if err := hit.GET[testItem](server.URL).
+		if err := hit.GET[hit.AnyError](server.URL).
 			WithCache(cache).
 			WithCacheSWR().
 			Do(ctx, &out); err != nil {
@@ -317,7 +317,7 @@ func TestFallback_Static(t *testing.T) {
 
 	fallback := testItem{ID: 42, Name: "fallback"}
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithFallback(&fallback).
 		Do(context.Background(), &out)
 	if err != nil {
@@ -341,7 +341,7 @@ func TestFallback_File(t *testing.T) {
 	}
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithFallbackFile(path).
 		Do(context.Background(), &out)
 	if err != nil {
@@ -359,7 +359,7 @@ func TestFallback_FS(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithFallbackFS(testFS, "testdata/fallback.json").
 		Do(context.Background(), &out)
 	if err != nil {
@@ -383,7 +383,7 @@ func TestEmbedFS_Body(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.POST[testItem](server.URL).
+	err := hit.POST[hit.AnyError](server.URL).
 		WithBodyFS(testFS, "testdata/body.json").
 		Do(context.Background(), &out)
 	if err != nil {
@@ -406,7 +406,7 @@ func TestBodyString(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.POST[testItem](server.URL).
+	err := hit.POST[hit.AnyError](server.URL).
 		WithBodyString("hello").
 		Do(context.Background(), &out)
 	if err != nil {
@@ -425,7 +425,7 @@ func TestBaseURLAndPath(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem]("").
+	err := hit.GET[hit.AnyError]("").
 		WithBaseURL(server.URL).
 		WithPath("/things/1").
 		Do(context.Background(), &out)
@@ -442,7 +442,7 @@ func TestErrs_Non2xx(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		Do(context.Background(), &out)
 	if err == nil {
 		t.Fatal("expected error")
@@ -451,8 +451,14 @@ func TestErrs_Non2xx(t *testing.T) {
 	if !errors.As(err, &e) {
 		t.Fatalf("expected *errs.Error, got %T", err)
 	}
-	if e.Status != http.StatusNotFound {
-		t.Fatalf("expected status 404, got %d", e.Status)
+	// The error describes OUR failure (a bad gateway); the upstream's 404 is
+	// kept server-side, not forwarded as our status.
+	if e.Status != http.StatusBadGateway || !hit.ErrUpstream.Is(e) {
+		t.Fatalf("expected ErrUpstream 502, got %d %s", e.Status, e.Code())
+	}
+	up, ok := e.UpstreamInfo()
+	if !ok || up.Status != http.StatusNotFound || up.Body != "not found" {
+		t.Fatalf("expected upstream 404 on the record, got %+v", up)
 	}
 }
 
@@ -471,7 +477,7 @@ func TestRetry_StatusPolicy(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithStatusRetry(
 			http.StatusTooManyRequests,
 			errs.ExponentialRetry(3, time.Millisecond, 5*time.Millisecond),
@@ -497,7 +503,7 @@ func TestRetry_StatusPolicyOverridesDefault(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithRetryPolicy(errs.FixedRetry(3, time.Millisecond)).
 		WithStatusRetry(http.StatusBadRequest, errs.NeverRetry()).
 		Do(context.Background(), &out)
@@ -524,7 +530,7 @@ func TestErrs_Wrap(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		Do(context.Background(), &out)
 	if err == nil {
 		t.Fatal("expected error")
@@ -539,7 +545,7 @@ func TestNilOut(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	err := hit.GET[testItem](server.URL).Do(context.Background(), nil)
+	err := hit.GET[hit.AnyError](server.URL).Do(context.Background(), (*testItem)(nil))
 	if err == nil {
 		t.Fatal("expected error for nil output pointer")
 	}
@@ -554,7 +560,7 @@ func TestTimeout(t *testing.T) {
 
 	var out testItem
 	ctx := context.Background()
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithTimeout(1*time.Millisecond).
 		Do(ctx, &out)
 	if err == nil {
@@ -571,7 +577,7 @@ func TestWithClient(t *testing.T) {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	var out testItem
-	err := hit.GET[testItem](server.URL).
+	err := hit.GET[hit.AnyError](server.URL).
 		WithClient(client).
 		Do(context.Background(), &out)
 	if err != nil {
@@ -591,7 +597,7 @@ func TestWithBodyReader(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.POST[testItem](server.URL).
+	err := hit.POST[hit.AnyError](server.URL).
 		WithBodyReader(strings.NewReader("reader body")).
 		Do(context.Background(), &out)
 	if err != nil {
@@ -606,7 +612,7 @@ func TestDoWithoutFallback(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).Do(context.Background(), &out)
+	err := hit.GET[hit.AnyError](server.URL).Do(context.Background(), &out)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -619,7 +625,7 @@ func TestEmptyResponse(t *testing.T) {
 	defer server.Close()
 
 	var out testItem
-	err := hit.GET[testItem](server.URL).Do(context.Background(), &out)
+	err := hit.GET[hit.AnyError](server.URL).Do(context.Background(), &out)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

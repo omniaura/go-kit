@@ -7,22 +7,22 @@ import (
 	"github.com/omniaura/go-kit/errs"
 )
 
-var MissingRequiredField = errs.NewFactory(http.StatusUnprocessableEntity, "missing required fields")
+var MissingRequiredField = errs.NewFactory(http.StatusUnprocessableEntity, "missing required fields",
+	errs.WithCode("missing_required_fields"), errs.WithAction(errs.ActionFixInput))
 
 func CheckEmptyStringFields(ctx context.Context, pairs ...string) *errs.Error {
 	if len(pairs)%2 != 0 {
 		panic("CheckEmptyStringFields requires pairs of field name and value")
 	}
-	var fieldsMissing []string
+	var e *errs.Error
 	for i := 0; i < len(pairs); i += 2 {
-		name := pairs[i]
-		value := pairs[i+1]
-		if value == "" {
-			fieldsMissing = append(fieldsMissing, name)
+		if pairs[i+1] != "" {
+			continue
 		}
+		if e == nil {
+			e = MissingRequiredField.New(ctx)
+		}
+		e.Field(pairs[i], "is required")
 	}
-	if len(fieldsMissing) > 0 {
-		return MissingRequiredField.New(ctx).Strs(fieldsMissing)
-	}
-	return nil
+	return e
 }

@@ -26,9 +26,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # errs and net/hit use Go 1.27 generic methods (hit.Client[E].GET[Out]),
+        # and the workspace go directive follows the newest module.
         go-version:
-          - '1.25.5'
-          - '1.26.1'
+          - '1.27.1'
 
     steps:
       - name: Check out repository
