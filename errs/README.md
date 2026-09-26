@@ -100,14 +100,14 @@ body, ok := e.UpstreamAs[anthropicError]()       // the provider's decoded error
 
 `UpstreamAs` is how a `net/hit` caller branches on a provider's own error type
 without re-parsing the body. The same Go feature is what makes
-`hit`'s inferred chain possible: `client.POST(path).JSON(&req).Do(ctx, &out)`,
-where `Do` and `JSON` are generic methods. Interface methods still cannot have type
+`hit`'s inferred chain possible: `client.POST(path).Body(&req).Do(ctx, &rsp)`,
+where `Do` and `Body` are generic methods. Interface methods still cannot have type
 parameters, so these are concrete methods on `*Error`.
 
 ## Building SDKs with `net/hit`
 
-`hit` returns these same values. Every request states two schemas, response
-`Out` and error `E`. A `hit.Client[E]` holds one provider's shared
+`hit` returns these same values. Every call has three schemas, `Req`, `Rsp`
+and `ErrRsp`, all inferred after the client is built. A `hit.Client[ErrRsp]` holds one provider's shared
 configuration and error schema, and its `Classify` and `ErrorMap` map typed
 error bodies and statuses onto factories. The resulting `*errs.Error` knows its
 retry policy and what the caller can do, and it keeps the provider's status,

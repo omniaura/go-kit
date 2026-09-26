@@ -16,7 +16,7 @@ type Upstream struct {
 	URL     string // scheme, host and path only; callers strip query and userinfo
 	Body    string // truncated
 	Code    string // the provider's own error code/type, when decoded
-	// Decoded is the error body decoded into the caller's error schema (the E
+	// Decoded is the error body decoded into the caller's error schema (the ErrRsp
 	// of a net/hit request). Read it with Error.UpstreamAs. Kept out of JSON:
 	// Body already carries the same bytes, truncated.
 	Decoded  any `json:"-"`
@@ -30,17 +30,17 @@ func (e *Error) Upstream(u Upstream) *Error {
 	return e
 }
 
-// UpstreamAs returns the upstream's error body decoded as E — the error schema
+// UpstreamAs returns the upstream's error body decoded as ErrRsp — the error schema
 // of the net/hit request that failed — so Go code can branch on a provider's
 // typed error without re-parsing Body.
 //
 //	if body, ok := e.UpstreamAs[anthropicError](); ok && body.Error.Type == "overloaded_error" { … }
-func (e *Error) UpstreamAs[E any]() (E, bool) {
-	var zero E
+func (e *Error) UpstreamAs[ErrRsp any]() (ErrRsp, bool) {
+	var zero ErrRsp
 	if e == nil || e.upstream == nil {
 		return zero, false
 	}
-	v, ok := e.upstream.Decoded.(E)
+	v, ok := e.upstream.Decoded.(ErrRsp)
 	return v, ok
 }
 

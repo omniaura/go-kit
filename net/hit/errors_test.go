@@ -259,13 +259,13 @@ func TestInferredChainWithErrorInto(t *testing.T) {
 
 	req := messageRequest{Prompt: "hi"}
 	var out message
-	if err := c.POST("/v1/messages").JSON(&req).Do(context.Background(), &out); err != nil || out.Text != "echo:hi" {
+	if err := c.POST("/v1/messages").Body(&req).Do(context.Background(), &out); err != nil || out.Text != "echo:hi" {
 		t.Fatalf("out = %+v, err = %v", out, err)
 	}
 
 	req.Prompt = "fail"
 	var apiErr providerError
-	err := c.POST("/v1/messages").JSON(&req).ErrorInto(&apiErr).Do(context.Background(), &out)
+	err := c.POST("/v1/messages").Body(&req).ErrorInto(&apiErr).Do(context.Background(), &out)
 	if !errBadPrompt.Is(err) {
 		t.Fatalf("want errBadPrompt, got %v", err)
 	}

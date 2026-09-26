@@ -11,10 +11,11 @@ import (
 
 // Client is the configuration an SDK shares across every endpoint of one
 // provider: the base URL, the *http.Client, default headers, the error map,
-// retry tables, rate limiting, concurrency gates and caching — plus E, the
+// retry tables, rate limiting, concurrency gates and caching — plus ErrRsp, the
 // provider's error schema. SDKs usually have one standardized error shape for
-// every endpoint and a different response shape per endpoint, so E is fixed
-// on the Client and Out is inferred per call from Do(ctx, &out) (a Go 1.27
+// every endpoint and a different response shape per endpoint, so ErrRsp is fixed
+// on the Client; Req is inferred per call from Body(&req) and Rsp from
+// Do(ctx, &rsp) (Go 1.27
 // generic method) — no call site needs a type argument:
 //
 //	type apiError struct {
@@ -37,22 +38,23 @@ import (
 //		StatusRetryPolicy(errs.TransientStatusRetry(errs.ExponentialRetry(3, 250*time.Millisecond, 4*time.Second)))
 //
 //	func CreateMessage(ctx context.Context, key string, req MessageRequest) (Message, error) {
-//		var out Message
-//		err := anthropic.POST("/v1/messages").Header("x-api-key", key).JSON(&req).Do(ctx, &out)
-//		return out, err
+//		var rsp Message
+//		err := anthropic.POST("/v1/messages").Header("x-api-key", key).Body(&req).Do(ctx, &rsp)
+//		return rsp, err
 //	}
 //
 // A Client is safe for concurrent use once configured: each call copies its
 // settings into a fresh Request, which per-call builders then adjust.
-type Client[E any] struct {
+type Client[ErrRsp any] struct {
 	statusRetries errs.StatusRetryPolicy
 	headers       http.Header
 	httpClient    *http.Client
 	cache         Cache
 	limiter       RateLimiter
 	gate          Gate
-	classify      func(status int, body *E, header http.Header) (Classified, bool)
+	classify      func(status int, body *ErrRsp, header http.Header) (Classified, bool)
 	errorMap      ErrorMap
+	dataType      DataType
 	baseURL       string
 	retryPolicy   errs.RetryPolicy
 	timeout       time.Duration
@@ -60,34 +62,42 @@ type Client[E any] struct {
 }
 
 // NewClient starts a Client for the API at baseURL whose error bodies decode
-// as E. Use AnyError when the provider documents no error shape.
-func NewClient[E any](baseURL string) *Client[E] {
-	return &Client[E]{
+// as ErrRsp. Use AnyError when the provider documents no error shape.
+func NewClient[ErrRsp any](baseURL string) *Client[ErrRsp] {
+	return &Client[ErrRsp]{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		headers: make(http.Header),
 	}
 }
 
 // Service names the provider on error records and logs.
-func (c *Client[E]) Service(name string) *Client[E] {
+func (c *Client[ErrRsp]) Service(name string) *Client[ErrRsp] {
 	c.errorMap.Service = name
 	return c
 }
 
+// DataType sets the SDK-wide encoding for request bodies, responses and error
+// bodies whose types do not declare their own (HasDataType) — e.g. hit.XML for
+// a SOAP API. JSON when unset.
+func (c *Client[ErrRsp]) DataType(dt DataType) *Client[ErrRsp] {
+	c.dataType = dt
+	return c
+}
+
 // Header sets a header sent on every request.
-func (c *Client[E]) Header(key, value string) *Client[E] {
+func (c *Client[ErrRsp]) Header(key, value string) *Client[ErrRsp] {
 	c.headers.Set(key, value)
 	return c
 }
 
 // HTTPClient sets the *http.Client (transport, TLS, proxies) for every request.
-func (c *Client[E]) HTTPClient(h *http.Client) *Client[E] {
+func (c *Client[ErrRsp]) HTTPClient(h *http.Client) *Client[ErrRsp] {
 	c.httpClient = h
 	return c
 }
 
 // Timeout bounds every request.
-func (c *Client[E]) Timeout(d time.Duration) *Client[E] {
+func (c *Client[ErrRsp]) Timeout(d time.Duration) *Client[ErrRsp] {
 	c.timeout = d
 	return c
 }
@@ -96,7 +106,7 @@ func (c *Client[E]) Timeout(d time.Duration) *Client[E] {
 // wins on conflicts), KeepHeaders are appended, and non-zero Service,
 // ClientError, ServerError and Transport replace what was set before — so
 // Service/Status/Errors can be called in any order.
-func (c *Client[E]) Errors(m ErrorMap) *Client[E] {
+func (c *Client[ErrRsp]) Errors(m ErrorMap) *Client[ErrRsp] {
 	for status, f := range m.Status {
 		c.Status(status, f)
 	}
@@ -117,7 +127,7 @@ func (c *Client[E]) Errors(m ErrorMap) *Client[E] {
 }
 
 // Status maps one upstream status to a factory.
-func (c *Client[E]) Status(status int, factory errs.ErrorFactory) *Client[E] {
+func (c *Client[ErrRsp]) Status(status int, factory errs.ErrorFactory) *Client[ErrRsp] {
 	if c.errorMap.Status == nil {
 		c.errorMap.Status = make(map[int]errs.ErrorFactory)
 	}
@@ -126,71 +136,71 @@ func (c *Client[E]) Status(status int, factory errs.ErrorFactory) *Client[E] {
 }
 
 // Classify picks a factory from the decoded error body; see Request.Classify.
-func (c *Client[E]) Classify(fn func(status int, body *E, header http.Header) (Classified, bool)) *Client[E] {
+func (c *Client[ErrRsp]) Classify(fn func(status int, body *ErrRsp, header http.Header) (Classified, bool)) *Client[ErrRsp] {
 	c.classify = fn
 	return c
 }
 
 // Retry sets the fallback retry policy for every request.
-func (c *Client[E]) Retry(policy errs.RetryPolicy) *Client[E] {
+func (c *Client[ErrRsp]) Retry(policy errs.RetryPolicy) *Client[ErrRsp] {
 	c.retryPolicy = policy
 	c.retrySet = true
 	return c
 }
 
 // StatusRetryPolicy sets per-status retry policies for every request.
-func (c *Client[E]) StatusRetryPolicy(policy errs.StatusRetryPolicy) *Client[E] {
+func (c *Client[ErrRsp]) StatusRetryPolicy(policy errs.StatusRetryPolicy) *Client[ErrRsp] {
 	c.statusRetries = maps.Clone(policy)
 	return c
 }
 
 // Rate applies a shared request-rate limiter to every request.
-func (c *Client[E]) Rate(limiter RateLimiter) *Client[E] {
+func (c *Client[ErrRsp]) Rate(limiter RateLimiter) *Client[ErrRsp] {
 	c.limiter = limiter
 	return c
 }
 
 // Gate applies a shared concurrency gate to every request.
-func (c *Client[E]) Gate(gate Gate) *Client[E] {
+func (c *Client[ErrRsp]) Gate(gate Gate) *Client[ErrRsp] {
 	c.gate = gate
 	return c
 }
 
 // Cache sets the cache used by cacheable requests (GET by default).
-func (c *Client[E]) Cache(cache Cache) *Client[E] {
+func (c *Client[ErrRsp]) Cache(cache Cache) *Client[ErrRsp] {
 	c.cache = cache
 	return c
 }
 
 // GET starts a GET of path. The response type is inferred at Do.
-func (c *Client[E]) GET(path string) *Request[E] {
+func (c *Client[ErrRsp]) GET(path string) *Request[ErrRsp] {
 	return c.request(http.MethodGet, path)
 }
 
 // POST starts a POST of path. The response type is inferred at Do.
-func (c *Client[E]) POST(path string) *Request[E] {
+func (c *Client[ErrRsp]) POST(path string) *Request[ErrRsp] {
 	return c.request(http.MethodPost, path)
 }
 
 // PUT starts a PUT of path. The response type is inferred at Do.
-func (c *Client[E]) PUT(path string) *Request[E] {
+func (c *Client[ErrRsp]) PUT(path string) *Request[ErrRsp] {
 	return c.request(http.MethodPut, path)
 }
 
 // PATCH starts a PATCH of path. The response type is inferred at Do.
-func (c *Client[E]) PATCH(path string) *Request[E] {
+func (c *Client[ErrRsp]) PATCH(path string) *Request[ErrRsp] {
 	return c.request(http.MethodPatch, path)
 }
 
 // DELETE starts a DELETE of path. The response type is inferred at Do.
-func (c *Client[E]) DELETE(path string) *Request[E] {
+func (c *Client[ErrRsp]) DELETE(path string) *Request[ErrRsp] {
 	return c.request(http.MethodDelete, path)
 }
 
 // request copies the Client's shared settings into a fresh Request so
 // per-call builders never mutate the Client.
-func (c *Client[E]) request(method, path string) *Request[E] {
-	r := newRequest[E](method, "", defaultCacheable(method))
+func (c *Client[ErrRsp]) request(method, path string) *Request[ErrRsp] {
+	r := newRequest[ErrRsp](method, "", defaultCacheable(method))
 	r.baseURL = c.baseURL
 	r.path = path
 	r.headers = c.headers.Clone()
@@ -200,6 +210,7 @@ func (c *Client[E]) request(method, path string) *Request[E] {
 	r.limiter = c.limiter
 	r.gate = c.gate
 	r.classify = c.classify
+	r.dataType = c.dataType
 	r.retryPolicy = c.retryPolicy
 	r.retrySet = c.retrySet
 	r.statusRetries = maps.Clone(c.statusRetries)

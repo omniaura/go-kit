@@ -7,14 +7,14 @@ adapters, duplicate request suppression, and blocking request limits.
 ## Request API
 
 ```go
-var out ModelsResponse
+var rsp ModelsResponse
 
 err := hit.GET[hit.AnyError]("https://openrouter.ai").
 	Path("/api/v1/models").
 	Query("supported_parameters", "tools").
 	Query("output_modalities", "text").
 	Headers("Authorization", "Bearer "+apiKey).
-	Do(ctx, &out)
+	Do(ctx, &rsp)
 ```
 
 Short fluent request methods are preferred: `Header`, `Headers`, `Body`, `JSON`,
@@ -79,7 +79,7 @@ cache := hit.NewLayeredCache(hot, warm)
 err := hit.GET[hit.AnyError](modelsURL).
 	Cache(cache).
 	Key(hit.Field("provider", "openrouter")).
-	Do(ctx, &out)
+	Do(ctx, &rsp)
 ```
 
 The layered cache checks hot to cold, backfills hotter layers on a colder hit,
@@ -101,7 +101,7 @@ limiter, err := hit.RPS(5)
 
 err = hit.GET[hit.AnyError](modelsURL).
 	Rate(limiter).
-	Do(ctx, &out)
+	Do(ctx, &rsp)
 ```
 
 Use a semaphore gate to cap concurrent in-flight requests:
@@ -111,49 +111,80 @@ gate, err := hit.NewSemaphore(16)
 
 err = hit.GET[hit.AnyError](detailsURL).
 	Gate(gate).
-	Do(ctx, &out)
+	Do(ctx, &rsp)
 ```
 
 Both `Rate` and `Gate` honor request context cancellation while callers wait.
 
-## Two Schemas, Inferred: Response and Error
+## Req, Rsp, ErrRsp: three schemas, all inferred
 
-Every call has a success schema `Out` and an error schema `E`, and the types
-come from the pointers you already pass:
+A call has up to three body types: the request `Req`, the 2xx response `Rsp`,
+and the error response `ErrRsp`. After the error schema is fixed, the rest come
+from the pointers you already pass:
 
 ```go
-var out ModelsResponse
-err := hit.GET[OpenRouterError](modelsURL).Do(ctx, &out) // E explicit, Out inferred from &out
+var rsp ModelsResponse
+err := hit.GET[OpenRouterError](modelsURL).Do(ctx, &rsp) // ErrRsp explicit, Rsp inferred from &rsp
 ```
 
-- **`Out` is inferred at `Do(ctx, &out)`.** Go infers type arguments only from
+- **`Rsp` is inferred at `Do(ctx, &rsp)`.** Go infers type arguments only from
   the arguments of the generic call itself, never backwards through a method
-  chain. So `Out` belongs on the last call, which is a Go 1.27 generic method,
-  and not on `GET`.
-- **`In` (the request body) is inferred at `JSON(&req)`.** It takes a pointer,
-  so the body is never copied on the way in. A request body type says nothing
-  about the response type, so `JSON` cannot supply `Out`.
-- **`E` is fixed once**, on the `Client`, or explicitly on a one-off
-  `hit.GET[E](url)`. On any non-2xx response the body is decoded as `E`, passed
-  to `Classify` as `*E`, copied into `ErrorInto(&apiErr)` if you asked for it,
-  and kept on the returned `*errs.Error`:
+  chain. So `Rsp` belongs on the last call, which is a Go 1.27 generic method,
+  and not on `POST`.
+- **`Req` is inferred at `Body(&req)`.** It takes a pointer, so the body is
+  never copied on the way in. A value passed to an encoder's `any` is a full
+  heap copy: 2945 B/op by value vs 640 B/op by pointer for a ~2.3 KB body on Go
+  1.27.1. A request body type says nothing about the response type, so `Body`
+  cannot supply `Rsp`.
+- **`ErrRsp` is fixed once**, on the `Client`, or explicitly on a one-off
+  `hit.GET[ErrRsp](url)`. On any non-2xx response the body is decoded as
+  `ErrRsp`, passed to `Classify` as `*ErrRsp`, copied into
+  `ErrorInto(&errRsp)` if you asked for it, and kept on the returned
+  `*errs.Error`:
 
 ```go
-var apiErr OpenRouterError
-err := hit.GET[OpenRouterError](modelsURL).ErrorInto(&apiErr).Do(ctx, &out)
+var errRsp OpenRouterError
+err := hit.GET[OpenRouterError](modelsURL).ErrorInto(&errRsp).Do(ctx, &rsp)
 // or, after the fact:
 if body, ok := errs.AsError(ctx, err).UpstreamAs[OpenRouterError](); ok { … }
 ```
 
-Use `hit.AnyError` (a `json.RawMessage`) for endpoints with no documented error
-shape.
+## Not only JSON: DataType
+
+`Body`, `Do` and error decoding choose a wire encoding per type, in this order:
+
+1. An explicit `BodyAs(dt, &req)` / `ResponseAs(dt)`.
+2. The type's own `hit.HasDataType`, checked on the pointer.
+3. The request or Client default, set with `DataType(dt)`.
+4. JSON.
+
+`Do` also sends the response type's `Accept` unless you set one yourself.
+
+```go
+type Envelope struct{ XMLName xml.Name `xml:"Envelope"`; … }
+func (*Envelope) DataType() hit.DataType { return hit.XML }
+
+soap.POST("/service").Body(&env).Do(ctx, &reply) // XML both ways, still inferred
+
+form := url.Values{"grant_type": {"client_credentials"}}
+var token string
+auth.POST("/oauth/token").BodyAs(hit.Form, &form).ResponseAs(hit.Text).Do(ctx, &token)
+
+legacy := hit.NewClient[soapFault](baseURL).DataType(hit.XML) // an all-XML SDK
+```
+
+Built in: `hit.JSON`, `hit.XML`, `hit.Form` (url.Values / string maps),
+`hit.Text` and `hit.Bytes` (string / []byte). Anything else, such as protobuf,
+msgpack or CBOR, is a three-method `DataType`. `.JSON(&req)` forces JSON
+whatever `Req` declares, and `RawBody([]byte)`, `BodyString`, `BodyReader` and
+`BodyFS` send bytes as they are.
 
 ## Client: an SDK in a few declarations (Go 1.27)
 
 Providers usually have **one** error shape for every endpoint and a
-**different** response shape per endpoint. `hit.Client[E]` fixes `E` and the
-SDK-wide configuration once. After `NewClient` no call site needs a type
-argument:
+**different** request and response shape per endpoint. `hit.Client[ErrRsp]`
+fixes `ErrRsp` and the SDK-wide configuration once. After `NewClient`, no call
+site needs a type argument:
 
 ```go
 type apiError struct {
@@ -177,30 +208,31 @@ var anthropic = hit.NewClient[apiError]("https://api.anthropic.com").
 	}).
 	StatusRetryPolicy(errs.TransientStatusRetry(errs.ExponentialRetry(3, 250*time.Millisecond, 4*time.Second)))
 
-func CreateMessage(ctx context.Context, key string, req MessageRequest) (Message, error) {
-	var out Message
-	err := anthropic.POST("/v1/messages").Header("x-api-key", key).JSON(&req).Do(ctx, &out)
-	return out, err
+func CreateMessage(ctx context.Context, key string, req *MessageRequest) (Message, error) {
+	var rsp Message
+	err := anthropic.POST("/v1/messages").Header("x-api-key", key).Body(req).Do(ctx, &rsp)
+	return rsp, err
 }
 
 func ListModels(ctx context.Context, key string) (ModelList, error) {
-	var out ModelList
-	err := anthropic.GET("/v1/models").Header("x-api-key", key).Do(ctx, &out)
-	return out, err
+	var rsp ModelList
+	err := anthropic.GET("/v1/models").Header("x-api-key", key).Do(ctx, &rsp)
+	return rsp, err
 }
 ```
 
-The Client holds the base URL, `*http.Client`, default headers, timeout, error
-map, typed `Classify`, retry tables, `Rate` limiter, `Gate` and `Cache`. Each
-call copies those settings into a fresh `Request`, so per-call builders never
-change the Client, and one Client is safe to share across goroutines.
+The Client holds the base URL, `*http.Client`, default headers, timeout,
+`DataType`, error map, typed `Classify`, retry tables, `Rate` limiter, `Gate`
+and `Cache`. Each call copies those settings into a fresh `Request`, so
+per-call builders never change the Client, and one Client is safe to share
+across goroutines.
 
 ## Typed Errors
 
 A failed call returns an `*errs.Error` that describes the failure from the
 caller's side. Resolution order:
 
-1. The typed `Classify` on the decoded `E`.
+1. The typed `Classify` on the decoded `ErrRsp`.
 2. `ErrorMap.Status[code]`.
 3. `ClientError` / `ServerError`.
 4. The defaults:
@@ -215,7 +247,7 @@ caller's side. Resolution order:
 An upstream 401 means *your* credential is wrong. It must never reach your own
 caller as a 401 that signs them out. The upstream's real status, the body
 (truncated), the provider's error type, and request-id and rate-limit headers
-are kept on `errs.Upstream`, alongside the decoded `E`. They go to the log line
+are kept on `errs.Upstream`, alongside the decoded `ErrRsp`. They go to the log line
 and the error `Sink`s, never to the client. The URL is recorded without its
 query string.
 
