@@ -1,8 +1,6 @@
 module github.com/omniaura/go-kit/pgconv
 
-go 1.25.5
-
-toolchain go1.26.1
+go 1.27
 
 require (
 	github.com/google/uuid v1.6.0
