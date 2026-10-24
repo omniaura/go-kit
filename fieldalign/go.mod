@@ -1,8 +1,6 @@
 module github.com/omniaura/go-kit/fieldalign
 
-go 1.25.5
-
-toolchain go1.26.1
+go 1.27
 
 require golang.org/x/tools v0.44.0
 
