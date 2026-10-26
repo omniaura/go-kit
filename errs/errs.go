@@ -144,6 +144,7 @@ func (e *Error) Severity(severity Severity) *Error {
 
 // AddError records err as a cause: its text goes to the log and the Sinks, and
 // errors.Is/As see it through Unwrap. It never reaches the response.
+// Use AddPrivateError when even server logs must not contain err's text.
 func (e *Error) AddError(err error) *Error {
 	if err == nil {
 		return e
