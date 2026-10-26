@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -112,11 +113,15 @@ func TestDiagnoseCustomClassifierAndTree(t *testing.T) {
 }
 
 func TestDiagnoseBoundedTrees(t *testing.T) {
+	urlCycle := &url.Error{}
+	urlCycle.Err = urlCycle
+	netCycle := &net.OpError{}
+	netCycle.Err = netCycle
 	wide := make([]error, 1000)
 	for i := range wide {
 		wide[i] = errors.New(secret)
 	}
-	for _, err := range []error{&cyclicCause{}, errors.Join(wide...)} {
+	for _, err := range []error{&cyclicCause{}, urlCycle, netCycle, errors.Join(wide...)} {
 		d := errs.Diagnose(err)
 		if !d.Truncated || len(d.Causes) != 32 {
 			t.Fatalf("not bounded: %v", d)

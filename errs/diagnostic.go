@@ -117,8 +117,14 @@ func classifyDiagnostic(err error, classifiers []Classifier) Classification {
 	case context.DeadlineExceeded:
 		return Classification{Class: "timeout"}
 	}
-	if e, ok := err.(net.Error); ok && e.Timeout() {
-		return Classification{Class: "timeout"}
+	// Standard wrapper Timeout methods recurse into their child. Inspect the
+	// child via our bounded queue instead, so cyclic URL/net wrappers stay safe.
+	switch err.(type) {
+	case *url.Error, *net.OpError:
+	default:
+		if e, ok := err.(net.Error); ok && e.Timeout() {
+			return Classification{Class: "timeout"}
+		}
 	}
 	for _, classify := range classifiers {
 		if classify == nil {
