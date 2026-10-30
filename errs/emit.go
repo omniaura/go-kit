@@ -44,7 +44,23 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64((e.retryAfter+time.Second-1)/time.Second), 10))
 	}
 	w.WriteHeader(int(e.Status))
-	if _, err := w.Write(body); err != nil {
+	_, err := w.Write(body)
+	if e.clientCanceled() {
+		// The request's own context was cancelled and that cancellation is
+		// what failed: the client hung up (a navigation, an image scrolled
+		// out of view). Behind a proxy or on HTTP/2 the write above usually
+		// "succeeds" into a buffer anyway, so the write error cannot be what
+		// decides this. Not a server fault: logged at info, never recorded.
+		event := zerolog.Ctx(e.context()).Info().
+			Int("status", int(e.Status)).Str("error_code", e.code)
+		if err != nil {
+			event = event.AnErr("write_error", err)
+		}
+		applyAttrs(event, e.logStack).Msg("client canceled the request")
+		e.emitted = true
+		return true
+	}
+	if err != nil {
 		if ClientGone(err) {
 			// The client left before hearing about it. The failed write is
 			// only a warning. Whether the error itself is still a fault
@@ -66,6 +82,13 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 	}
 	e.emit("http", "request aborted: "+e.Message())
 	return true
+}
+
+// clientCanceled reports whether the request itself was cancelled (not timed
+// out) and that cancellation is among the recorded causes. A cancellation
+// with the request still live is some internal cancel, and so a fault.
+func (e *Error) clientCanceled() bool {
+	return errors.Is(e.context().Err(), context.Canceled) && e.causedByCancellation()
 }
 
 // causedByCancellation reports whether any recorded cause is the request's
