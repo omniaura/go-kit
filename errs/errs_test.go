@@ -347,19 +347,28 @@ func TestCancellationThatIsNotTheClientsIsStillAFault(t *testing.T) {
 	cancel()
 	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	t.Cleanup(cancelExpired)
+	// errgroup.WithContext cancels with the first sibling's error as the cause.
+	siblingFailed, cancelSibling := context.WithCancelCause(context.Background())
+	cancelSibling(errors.New("sibling query failed"))
 	for name, tc := range map[string]struct {
-		ctx   context.Context
-		cause error
+		ctx    context.Context
+		causes []error
 	}{
-		"request live, internal cancel":  {context.Background(), fmt.Errorf("worker: %w", context.Canceled)},
-		"server deadline":                {expired, fmt.Errorf("query: %w", context.DeadlineExceeded)},
-		"client gone, independent fault": {canceled, errors.New(secret)},
+		"request live, internal cancel":  {context.Background(), []error{fmt.Errorf("worker: %w", context.Canceled)}},
+		"server deadline":                {expired, []error{fmt.Errorf("query: %w", context.DeadlineExceeded)}},
+		"client gone, independent fault": {canceled, []error{errors.New(secret)}},
+		"client gone, cancel and fault":  {canceled, []error{context.Canceled, errors.New(secret)}},
+		"errgroup sibling failure":       {siblingFailed, []error{fmt.Errorf("fetch: %w", context.Canceled)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var got []errs.Record
 			errs.AddSink(errs.SinkFunc(func(_ context.Context, r errs.Record) { got = append(got, r) }))
 			t.Cleanup(errs.ResetSinks)
-			errs.Unknown.New(tc.ctx).AddError(tc.cause).Abort(httptest.NewRecorder())
+			e := errs.Unknown.New(tc.ctx)
+			for _, c := range tc.causes {
+				e = e.AddError(c)
+			}
+			e.Abort(httptest.NewRecorder())
 			if len(got) != 1 {
 				t.Fatalf("records = %d, want the fault recorded", len(got))
 			}

@@ -84,11 +84,25 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 	return true
 }
 
-// clientCanceled reports whether the request itself was cancelled (not timed
-// out) and that cancellation is among the recorded causes. A cancellation
-// with the request still live is some internal cancel, and so a fault.
+// clientCanceled reports whether the request was cancelled by its client and
+// that cancellation is the whole story: every recorded cause is a
+// cancellation, so an independent failure alongside it is still a fault.
+//
+// net/http cancels a request's context with a plain cancel when the client
+// goes, so its Cause is exactly context.Canceled. A deadline, or a context an
+// errgroup cancelled because a sibling failed (whose Cause is that failure),
+// does not qualify.
 func (e *Error) clientCanceled() bool {
-	return errors.Is(e.context().Err(), context.Canceled) && e.causedByCancellation()
+	ctx := e.context()
+	if !errors.Is(ctx.Err(), context.Canceled) || !errors.Is(context.Cause(ctx), context.Canceled) || len(e.causes) == 0 {
+		return false
+	}
+	for _, c := range e.causes {
+		if !errors.Is(c, context.Canceled) {
+			return false
+		}
+	}
+	return true
 }
 
 // causedByCancellation reports whether any recorded cause is the request's
