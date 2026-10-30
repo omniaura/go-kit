@@ -44,7 +44,23 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64((e.retryAfter+time.Second-1)/time.Second), 10))
 	}
 	w.WriteHeader(int(e.Status))
-	if _, err := w.Write(body); err != nil {
+	_, err := w.Write(body)
+	if e.clientCanceled() {
+		// The request's own context was cancelled and that cancellation is
+		// what failed: the client hung up (a navigation, an image scrolled
+		// out of view). Behind a proxy or on HTTP/2 the write above usually
+		// "succeeds" into a buffer anyway, so the write error cannot be what
+		// decides this. Not a server fault: logged at info, never recorded.
+		event := zerolog.Ctx(e.context()).Info().
+			Int("status", int(e.Status)).Str("error_code", e.code)
+		if err != nil {
+			event = event.AnErr("write_error", err)
+		}
+		applyAttrs(event, e.logStack).Msg("client canceled the request")
+		e.emitted = true
+		return true
+	}
+	if err != nil {
 		if ClientGone(err) {
 			// The client left before hearing about it. The failed write is
 			// only a warning. Whether the error itself is still a fault
@@ -65,6 +81,27 @@ func (e *Error) Abort(w http.ResponseWriter) bool {
 		}
 	}
 	e.emit("http", "request aborted: "+e.Message())
+	return true
+}
+
+// clientCanceled reports whether the request was cancelled by its client and
+// that cancellation is the whole story: every recorded cause is a
+// cancellation, so an independent failure alongside it is still a fault.
+//
+// net/http cancels a request's context with a plain cancel when the client
+// goes, so its Cause is exactly context.Canceled. A deadline, or a context an
+// errgroup cancelled because a sibling failed (whose Cause is that failure),
+// does not qualify.
+func (e *Error) clientCanceled() bool {
+	ctx := e.context()
+	if !errors.Is(ctx.Err(), context.Canceled) || !errors.Is(context.Cause(ctx), context.Canceled) || len(e.causes) == 0 {
+		return false
+	}
+	for _, c := range e.causes {
+		if !errors.Is(c, context.Canceled) {
+			return false
+		}
+	}
 	return true
 }
 

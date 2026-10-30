@@ -318,3 +318,60 @@ func TestGenericAccessors(t *testing.T) {
 		t.Fatal("nil error")
 	}
 }
+
+// DITTO-1223: behind a proxy or on HTTP/2 the error response "writes" fine
+// after the client hung up, so client cancellations were recorded as server
+// faults (43k a week on one image route).
+func TestClientCancellationIsNotAFaultEvenWhenTheWriteSucceeds(t *testing.T) {
+	var got []errs.Record
+	errs.AddSink(errs.SinkFunc(func(_ context.Context, r errs.Record) { got = append(got, r) }))
+	t.Cleanup(errs.ResetSinks)
+	var logs bytes.Buffer
+	ctx, cancel := context.WithCancel(zerolog.New(&logs).WithContext(context.Background()))
+	cancel()
+
+	errs.Unknown.New(ctx).AddError(fmt.Errorf("load avatar: %w", context.Canceled)).Abort(httptest.NewRecorder())
+	if strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"level":"info"`) {
+		t.Fatalf("a client cancellation should log at info: %s", logs.String())
+	}
+	if len(got) != 0 {
+		t.Fatalf("a client cancellation should not be recorded: %+v", got)
+	}
+}
+
+// The request is still live, so a Canceled cause is some internal cancel, a
+// server timeout is a deadline, and a cancelled request can still carry an
+// independent fault: all three stay recorded faults.
+func TestCancellationThatIsNotTheClientsIsStillAFault(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	t.Cleanup(cancelExpired)
+	// errgroup.WithContext cancels with the first sibling's error as the cause.
+	siblingFailed, cancelSibling := context.WithCancelCause(context.Background())
+	cancelSibling(errors.New("sibling query failed"))
+	for name, tc := range map[string]struct {
+		ctx    context.Context
+		causes []error
+	}{
+		"request live, internal cancel":  {context.Background(), []error{fmt.Errorf("worker: %w", context.Canceled)}},
+		"server deadline":                {expired, []error{fmt.Errorf("query: %w", context.DeadlineExceeded)}},
+		"client gone, independent fault": {canceled, []error{errors.New(secret)}},
+		"client gone, cancel and fault":  {canceled, []error{context.Canceled, errors.New(secret)}},
+		"errgroup sibling failure":       {siblingFailed, []error{fmt.Errorf("fetch: %w", context.Canceled)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []errs.Record
+			errs.AddSink(errs.SinkFunc(func(_ context.Context, r errs.Record) { got = append(got, r) }))
+			t.Cleanup(errs.ResetSinks)
+			e := errs.Unknown.New(tc.ctx)
+			for _, c := range tc.causes {
+				e = e.AddError(c)
+			}
+			e.Abort(httptest.NewRecorder())
+			if len(got) != 1 {
+				t.Fatalf("records = %d, want the fault recorded", len(got))
+			}
+		})
+	}
+}
