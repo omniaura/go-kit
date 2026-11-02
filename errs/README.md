@@ -56,6 +56,60 @@ Server-only: `AddError`, `AddErrors`, `AddAttrs`, `AddMessage`, `Upstream`,
 works through an `*errs.Error`. `Error()` only ever contains the status and the
 public message.
 
+## Private causes and message-free diagnostics
+
+Server-only does not mean suitable for logs. SDK and database errors often
+contain prompts, URLs, SQL parameters or response bodies. `AddError` deliberately
+keeps their text for existing callers. Use `AddPrivateError` when their contents
+must stay out of both logs and durable error records:
+
+```go
+e := errs.Unknown.New(ctx).AddPrivateError(cause)
+e.Abort(w) // public response + message-free log and sink record
+errors.Is(e, context.Canceled) // still sees the original cause
+```
+
+`Diagnose(cause)` returns a standalone snapshot with a stable `Class`, error
+types, HTTP status codes, validated SQLSTATEs and parent indexes for wrappers
+and joined causes. It never reads error text, URL values, SQL details, provider
+bodies or upstream headers. It supports JSON, fmt, slog and zerolog:
+
+```go
+logger.Error().Object("error", errs.Diagnose(cause)).Msg("operation failed")
+slog.Error("operation failed", "error", errs.Diagnose(cause))
+```
+
+Adapters add vendor or domain knowledge without dependencies or global mutable
+registration. Each callback sees one concrete node; the engine handles traversal.
+Only return constant class names and audited metadata, never provider messages
+or arbitrary codes. A status-only adapter gets the standard HTTP classification:
+
+```go
+func classifySDK(err error) errs.Classification {
+    if e, ok := err.(*vendor.Error); ok {
+        return errs.Classification{Status: e.StatusCode}
+    }
+    return errs.Classification{}
+}
+
+e := errs.Unknown.New(ctx).AddPrivateError(cause, classifySDK)
+diagnostic := errs.Diagnose(cause, classifySDK)
+```
+
+The standard adapters recognize context cancellation, timeouts, `net/url`
+errors, `HTTPStatus() int`, `StatusCode() int`, `SQLState() string`, and
+`*errs.Error` including its upstream status. Cancellation takes precedence over
+timeouts, then the first recognized node in breadth-first order wins. Inspection
+is capped at 32 nodes, with `Truncated` set when the rest could not be inspected.
+The class of a truncated tree describes only its inspected nodes. Unknown errors
+keep their type and class `other`; nil has class `none`.
+
+`AddPrivateError` preserves the cause in memory for `errors.Is`/`errors.As` and
+adds only the snapshot to `Attrs`/`Detail`, logs and sinks. It does not scrub
+independent `AddError`, `AddMessage`, `AddAttrs`, `Upstream` or `Log` calls.
+Classifiers and metadata/Unwrap methods are trusted code and must not block or
+format private values. Use `Public` for client copy; diagnostics are for operators.
+
 ## One reference everywhere
 
 Every error has a `ref`. By default it is the request id that zerolog's `hlog`
