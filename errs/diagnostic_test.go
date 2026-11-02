@@ -67,6 +67,7 @@ func TestDiagnoseWithoutFormatting(t *testing.T) {
 		{"joined-cancel", errors.Join(&privateCause{503}, context.DeadlineExceeded, context.Canceled), "canceled"},
 		{"joined-timeout", errors.Join(&privateCause{503}, context.DeadlineExceeded), "timeout"},
 		{"errs-upstream", errs.Unknown.New(t.Context()).Upstream(errs.Upstream{Status: 429, URL: secret, Body: secret, Decoded: &privateCause{}}), "http_rate_limit"},
+		{"errs-upstream-no-status", errs.Unknown.New(t.Context()).Upstream(errs.Upstream{URL: secret, Body: secret}), "http_server"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := errs.Diagnose(tc.err)

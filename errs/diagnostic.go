@@ -138,7 +138,7 @@ func classifyDiagnostic(err error, classifiers []Classifier) Classification {
 	switch e := err.(type) {
 	case *Error:
 		c.Status = int(e.Status)
-		if e.upstream != nil {
+		if e.upstream != nil && e.upstream.Status != 0 {
 			c.Status = e.upstream.Status
 		}
 	case interface{ HTTPStatus() int }:
